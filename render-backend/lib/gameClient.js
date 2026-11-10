@@ -75,6 +75,15 @@ const CMD_DEFAULTS = {
   mergebox_openbox: {},
   discount_claimreward: { discountId: 1 },
   collection_claimfreereward: {},
+  bottlehelper_stop: { bottleType: -1 },
+  store_purchase: { goodsId: 1 },
+  activity_warorderget: {},
+  activity_warordertaskclaim: {},
+  activity_warorderrewardclaim: {},
+  activity_getlotteryinfo: {},
+  activity_lottery: { times: 1 },
+  activity_claimsignreward: {},
+  activity_commonbuygoods: {},
 };
 
 // 响应→请求命令映射
@@ -118,10 +127,21 @@ const RESP_MAP = {
   mergebox_openboxresp: "mergebox_openbox",
   discount_claimrewardresp: "discount_claimreward",
   collection_claimfreerewardresp: "collection_claimfreereward",
+  bottlehelper_stopresp: "bottlehelper_stop",
+  store_buyresp: "store_purchase",
+  activity_warordergetresp: "activity_warorderget",
+  activity_warorderclaimresp: [
+    "activity_warorderrewardclaim",
+    "activity_warordertaskclaim",
+  ],
+  activity_getlotteryinforesp: "activity_getlotteryinfo",
+  activity_lotteryresp: "activity_lottery",
+  activity_rewardresp: "activity_claimsignreward",
   syncrewardresp: [
     "system_buygold",
     "system_signinreward",
     "discount_claimreward",
+    "activity_commonbuygoods",
   ],
   syncpushresp: ["system_mysharecallback"],
 };

@@ -9,6 +9,7 @@ import express from "express";
 import cron from "node-cron";
 import { createApiKeyMiddleware } from "./lib/apiKeyAuth.js";
 import { GameClient } from "./lib/gameClient.js";
+import { runResetBottles, runXuanwuBlessing } from "./lib/gameTasks.js";
 
 dotenv.config();
 
@@ -121,6 +122,26 @@ const TASK_DEFINITIONS = {
       { cmd: "mergebox_openbox", params: {} },
     ],
   },
+  resetBottles: {
+    name: "重置罐子",
+    run: runResetBottles,
+  },
+  batchlingguanzi: {
+    name: "领取盐罐",
+    commands: [{ cmd: "bottlehelper_claim", params: {} }],
+  },
+  store_purchase: {
+    name: "黑市采购",
+    commands: [{ cmd: "store_purchase", params: {} }],
+  },
+  collection_claimfreereward: {
+    name: "珍宝阁免费领取",
+    commands: [{ cmd: "collection_claimfreereward", params: {} }],
+  },
+  batchXuanwuBlessing: {
+    name: "玄武赐福",
+    run: runXuanwuBlessing,
+  },
   dailyBundle: {
     name: "一键日常",
     commands: [
@@ -168,7 +189,27 @@ async function loadTokens() {
 }
 
 // ==================== 任务执行引擎 ====================
+const runningTasks = new Set();
+
 async function executeTask(task) {
+  if (!task?.id) throw new Error("任务缺少 id");
+  if (runningTasks.has(task.id)) {
+    addLog("WARN", "task", `任务正在执行，跳过重复调用: ${task.name}`, {
+      taskId: task.id,
+    });
+    return false;
+  }
+
+  runningTasks.add(task.id);
+  try {
+    await executeTaskUnlocked(task);
+    return true;
+  } finally {
+    runningTasks.delete(task.id);
+  }
+}
+
+async function executeTaskUnlocked(task) {
   addLog("INFO", "task", `开始执行任务: ${task.name}`, { taskId: task.id });
 
   // 兼容旧字段 token_ids 和新字段 selected_tokens
@@ -203,24 +244,16 @@ async function executeTask(task) {
     return;
   }
 
-  // 收集所有需要执行的命令（去重）
-  const allCommands = [];
-  const seenCmds = new Set();
+  const taskDefinitions = [];
   for (const key of taskKeys) {
     const taskDef = TASK_DEFINITIONS[key];
     if (!taskDef) {
       addLog("WARN", "task", `未知任务类型: ${key}，跳过`, { taskId: task.id });
       continue;
     }
-    for (const cmd of taskDef.commands) {
-      const cmdKey = cmd.cmd + JSON.stringify(cmd.params);
-      if (!seenCmds.has(cmdKey)) {
-        seenCmds.add(cmdKey);
-        allCommands.push(cmd);
-      }
-    }
+    taskDefinitions.push({ key, taskDef });
   }
-  if (allCommands.length === 0) {
+  if (taskDefinitions.length === 0) {
     addLog("ERROR", "task", "没有有效的命令可执行", { taskId: task.id });
     return;
   }
@@ -270,23 +303,28 @@ async function executeTask(task) {
         });
       }
 
-      const cmdResults = await client.executeBatch(allCommands, 800);
+      for (const { taskDef } of taskDefinitions) {
+        const cmdResults = taskDef.run
+          ? await taskDef.run(client)
+          : await client.executeBatch(taskDef.commands, 800);
 
-      for (const r of cmdResults) {
-        const logLevel = r.success ? "INFO" : "ERROR";
-        addLog(
-          logLevel,
-          "task",
-          `[${token.name}] ${r.cmd}: ${r.success ? "OK" : r.error}`,
-          { taskId: task.id },
-        );
-        await logToDb(
-          task.id,
-          token.name,
-          r.cmd,
-          r.success ? "success" : "error",
-          r.success ? undefined : r.error,
-        );
+        for (const result of cmdResults) {
+          const detail =
+            result.message || (result.success ? "OK" : result.error);
+          addLog(
+            result.success ? "INFO" : "ERROR",
+            "task",
+            `[${token.name}] ${result.cmd}: ${detail}`,
+            { taskId: task.id },
+          );
+          await logToDb(
+            task.id,
+            token.name,
+            result.cmd,
+            result.success ? "success" : "error",
+            result.success ? result.message : result.error,
+          );
+        }
       }
     } catch (err) {
       addLog("ERROR", "task", `执行失败 (${token.name}): ${err.message}`, {
@@ -506,6 +544,9 @@ app.post("/api/tasks/:id/run", async (req, res) => {
     .eq("id", req.params.id)
     .single();
   if (!task) return res.status(404).json({ error: "任务不存在" });
+  if (runningTasks.has(task.id)) {
+    return res.status(409).json({ error: "任务正在执行" });
+  }
   executeTask(task).catch((err) =>
     addLog("ERROR", "api", `手动执行失败: ${err.message}`),
   );
@@ -532,7 +573,8 @@ app.get("/api/task-definitions", (req, res) => {
   const list = Object.entries(TASK_DEFINITIONS).map(([key, val]) => ({
     key,
     name: val.name,
-    commands: val.commands.map((c) => c.cmd),
+    commands: val.commands?.map((command) => command.cmd) || [],
+    mode: val.run ? "custom" : "commands",
   }));
   res.json(list);
 });
