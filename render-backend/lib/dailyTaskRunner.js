@@ -136,8 +136,10 @@ export class DailyTaskRunner {
       }
 
       const currentFormation = teamInfo?.presetTeamInfo?.useTeamId;
-      if (!Number.isInteger(currentFormation))
-        throw new Error("服务器未提供有效阵容，停止切换");
+      if (!Number.isInteger(currentFormation)) {
+        this.log("服务器未提供有效阵容，跳过本次阵容相关操作", "warning");
+        return "unavailable";
+      }
       if (this.originalFormation === undefined)
         this.originalFormation = currentFormation;
       this.log(`当前阵容: ${currentFormation}`);
@@ -535,11 +537,12 @@ export class DailyTaskRunner {
             return false;
           }
 
-          await this.switchToFormationIfNeeded(
+          const formationReady = await this.switchToFormationIfNeeded(
             tokenId,
             settings.arenaFormation,
             "竞技场阵容",
           );
+          if (formationReady === "unavailable") return false;
           await this.executeGameCommand(
             tokenId,
             "arena_startarea",
@@ -933,9 +936,12 @@ export class DailyTaskRunner {
           if (this.activeCondition === undefined) supplementalIncomplete++;
           this.log(`任务执行失败: ${task.name} - ${error.message}`, "error");
           // Match the original runner: a business rejection fails this step only.
+          const businessError =
+            /服务器错误:\s*\d+/.test(error.message || "") ||
+            /^\[\d+\]/.test(error.message || "");
           if (
             !error.serverStateUnavailable &&
-            /服务器错误:\s*\d+/.test(error.message || "") &&
+            businessError &&
             !/\b(?:200400|12400000)\b/.test(error.message || "")
           ) {
             this.throwIfInterrupted(tokenId);

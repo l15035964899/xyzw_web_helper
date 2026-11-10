@@ -17,6 +17,7 @@ import {
 } from "./lib/gameTasks.js";
 
 dotenv.config();
+process.env.TZ = process.env.TZ || "Asia/Shanghai";
 
 // ==================== 工具函数 ====================
 function sleep(ms) {
