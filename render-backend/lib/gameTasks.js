@@ -96,8 +96,8 @@ function createTokenStore(client, token) {
     wsConnections: { [tokenId]: { client } },
     getWebSocketStatus: () =>
       client.connected && client.ws ? "connected" : "disconnected",
-    sendGetRoleInfo: (_id, params = {}, timeoutMs = 15000) =>
-      client.sendWithPromise("role_getroleinfo", params, timeoutMs),
+    sendGetRoleInfo: (_id, params = {}, _retryCount) =>
+      client.sendWithPromise("role_getroleinfo", params, 15000),
     sendMessageWithPromise: (_id, cmd, params = {}, timeoutMs = 8000) =>
       client.sendWithPromise(cmd, params, timeoutMs),
   };
@@ -427,5 +427,6 @@ export async function runXuanwuBlessing(
 }
 
 export const __test = {
+  createTokenStore,
   shanghaiDateBase,
 };

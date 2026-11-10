@@ -28,6 +28,26 @@ test("salt bottle reset stops before restarting the timer", async () => {
   );
 });
 
+test("Node daily task adapter treats the browser retry count as retries, not timeout milliseconds", async () => {
+  let timeoutMs;
+  const client = {
+    connected: true,
+    ws: {},
+    async sendWithPromise(cmd, params, timeout) {
+      timeoutMs = timeout;
+      return { cmd, params };
+    },
+  };
+  const tokenStore = __test.createTokenStore(client, {
+    id: "account-a",
+    name: "Test account",
+  });
+
+  await tokenStore.sendGetRoleInfo("account-a", {}, 2);
+
+  assert.equal(timeoutMs, 15000);
+});
+
 test("Shanghai activity-date prefixes do not depend on the Render host timezone", () => {
   assert.equal(
     __test.shanghaiDateBase(new Date("2026-11-10T16:30:00.000Z")),
