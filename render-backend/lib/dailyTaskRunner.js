@@ -938,11 +938,15 @@ export class DailyTaskRunner {
           if (error.interrupted) throw error;
           summary.failed++;
           if (this.activeCondition === undefined) supplementalIncomplete++;
-          this.log(`任务执行失败: ${task.name} - ${error.message}`, "error");
+          const businessError = isBusinessServerError(error.message);
+          this.log(
+            `任务执行${businessError ? "被服务器拒绝" : "失败"}: ${task.name} - ${error.message}`,
+            businessError ? "warning" : "error",
+          );
           // Match the original runner: a business rejection fails this step only.
           if (
             !error.serverStateUnavailable &&
-            isBusinessServerError(error.message) &&
+            businessError &&
             !/\b(?:200400|12400000)\b/.test(error.message || "")
           ) {
             this.throwIfInterrupted(tokenId);
