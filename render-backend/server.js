@@ -90,6 +90,10 @@ const TASK_DEFINITIONS = {
       { cmd: "legacy_claimhangup", params: {} },
     ],
   },
+  batchLegacyClaim: {
+    name: "领取功法残卷",
+    commands: [{ cmd: "legacy_claimhangup", params: {} }],
+  },
   heroRecruit: {
     name: "武将招募",
     commands: [
@@ -578,6 +582,39 @@ app.post("/api/tasks/:id/run-once", async (req, res) => {
 
   executeTask(task).catch((err) =>
     addLog("ERROR", "scheduler", `定时兜底执行失败: ${err.message}`, {
+      taskId: task.id,
+    }),
+  );
+  res.json({ status: "running", task: task.name });
+});
+
+app.post("/api/tasks/:id/run-if-due", async (req, res) => {
+  const minIntervalMinutes = Math.max(
+    Number.parseInt(req.query.minIntervalMinutes) || 285,
+    60,
+  );
+  const { data: task, error } = await supabase
+    .from("cron_tasks")
+    .select("*")
+    .eq("id", req.params.id)
+    .single();
+  if (error || !task) return res.status(404).json({ error: "任务不存在" });
+  if (!task.enabled) {
+    return res.json({ status: "skipped", reason: "task_disabled" });
+  }
+  if (runningTasks.has(task.id)) {
+    return res.status(409).json({ error: "任务正在执行" });
+  }
+  if (
+    task.last_run_at &&
+    Date.now() - new Date(task.last_run_at).getTime() <
+      minIntervalMinutes * 60 * 1000
+  ) {
+    return res.json({ status: "skipped", reason: "interval_not_elapsed" });
+  }
+
+  executeTask(task).catch((err) =>
+    addLog("ERROR", "scheduler", `间隔任务兜底执行失败: ${err.message}`, {
       taskId: task.id,
     }),
   );
