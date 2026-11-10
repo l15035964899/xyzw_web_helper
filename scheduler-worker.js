@@ -1,23 +1,37 @@
 const RETRY_DELAYS_MS = [5000, 10000, 15000];
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-function taskIdForCron(event, env) {
+function taskForCron(event, env) {
   const [, hourField] = event.cron.split(" ");
-  if (hourField === "16") return env.DAILY_TASK_ID;
-  if (hourField === "0") return env.ARENA_TASK_ID;
-  return "";
+  const hours = hourField.split(",").map(Number);
+  if (hours.some((hour) => [17, 22, 3, 8, 13].includes(hour))) {
+    return {
+      taskId: env.RECURRING_TASK_ID,
+      path: `/api/tasks/${encodeURIComponent(env.RECURRING_TASK_ID)}/run-if-due?minIntervalMinutes=285`,
+    };
+  }
+  if (hourField === "16") {
+    return {
+      taskId: env.DAILY_TASK_ID,
+      path: `/api/tasks/${encodeURIComponent(env.DAILY_TASK_ID)}/run-once`,
+    };
+  }
+  if (hourField === "0") {
+    return {
+      taskId: env.ARENA_TASK_ID,
+      path: `/api/tasks/${encodeURIComponent(env.ARENA_TASK_ID)}/run-once`,
+    };
+  }
+  return null;
 }
 
 async function runOnce(event, env) {
-  const taskId = taskIdForCron(event, env);
-  if (!taskId || !env.RENDER_BACKEND_URL || !env.RENDER_API_KEY) {
+  const targetTask = taskForCron(event, env);
+  if (!targetTask?.taskId || !env.RENDER_BACKEND_URL || !env.RENDER_API_KEY) {
     throw new Error("Scheduler environment is incomplete");
   }
 
-  const target = new URL(
-    `/api/tasks/${encodeURIComponent(taskId)}/run-once`,
-    env.RENDER_BACKEND_URL,
-  );
+  const target = new URL(targetTask.path, env.RENDER_BACKEND_URL);
   let response;
   for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt += 1) {
     response = await fetch(target, {
@@ -50,4 +64,4 @@ export default {
   },
 };
 
-export const __test = { runOnce, taskIdForCron };
+export const __test = { runOnce, taskForCron };
