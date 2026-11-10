@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { isBusinessServerError } from "../render-backend/lib/dailyTaskRunner.js";
 import {
   __test,
   runArenaFights,
@@ -46,6 +47,13 @@ test("Node daily task adapter treats the browser retry count as retries, not tim
   await tokenStore.sendGetRoleInfo("account-a", {}, 2);
 
   assert.equal(timeoutMs, 15000);
+});
+
+test("negative game business codes skip one daily step instead of aborting the account", () => {
+  assert.equal(isBusinessServerError("[-10006] 未知错误"), true);
+  assert.equal(isBusinessServerError("[3500020] 没有可领取的奖励"), true);
+  assert.equal(isBusinessServerError("服务器错误: 1700010"), true);
+  assert.equal(isBusinessServerError("请求超时: role_getroleinfo"), false);
 });
 
 test("Shanghai activity-date prefixes do not depend on the Render host timezone", () => {

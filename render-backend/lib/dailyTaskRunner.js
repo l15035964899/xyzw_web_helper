@@ -50,6 +50,10 @@ const getTodayBossId = (dailyTime) => {
   return DAY_BOSS_MAP[dayOfWeek];
 };
 
+export function isBusinessServerError(message = "") {
+  return /服务器错误:\s*\d+/.test(message) || /^\[-?\d+\]/.test(message);
+}
+
 export class DailyTaskRunner {
   constructor(tokenStore, delaySettings = null, options = {}) {
     this.loadConfig = options.loadConfig || loadDailyTaskConfig;
@@ -936,12 +940,9 @@ export class DailyTaskRunner {
           if (this.activeCondition === undefined) supplementalIncomplete++;
           this.log(`任务执行失败: ${task.name} - ${error.message}`, "error");
           // Match the original runner: a business rejection fails this step only.
-          const businessError =
-            /服务器错误:\s*\d+/.test(error.message || "") ||
-            /^\[\d+\]/.test(error.message || "");
           if (
             !error.serverStateUnavailable &&
-            businessError &&
+            isBusinessServerError(error.message) &&
             !/\b(?:200400|12400000)\b/.test(error.message || "")
           ) {
             this.throwIfInterrupted(tokenId);
