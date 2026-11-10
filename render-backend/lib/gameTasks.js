@@ -1,9 +1,24 @@
+import { DailyTaskRunner } from "./dailyTaskRunner.js";
+
 const DAY_MS = 24 * 60 * 60 * 1000;
 const WAR_ORDER_SUFFIX = "1";
 const SIGN_SUFFIX = "5";
 const GOODS_SUFFIX = "41";
 const MAX_REWARD_ROUNDS = 10;
 const SIGN_MAX_DAY = 6;
+const DAILY_SETTINGS_DEFAULTS = {
+  arenaFormation: 1,
+  bossFormation: 1,
+  bossTimes: 2,
+  claimBottle: true,
+  payRecruit: true,
+  openBox: true,
+  arenaEnable: true,
+  claimHangUp: true,
+  claimEmail: true,
+  blackMarketPurchase: true,
+  freeGachaEnable: true,
+};
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -52,6 +67,193 @@ function createRecorder() {
     }
   };
   return { results, send };
+}
+
+function normalizeObject(value) {
+  if (value && typeof value === "object" && !Array.isArray(value)) return value;
+  if (typeof value !== "string") return {};
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+function taskSettings(token) {
+  return {
+    ...DAILY_SETTINGS_DEFAULTS,
+    ...normalizeObject(token?.daily_settings),
+  };
+}
+
+function createTokenStore(client, token) {
+  const tokenId = token.id;
+  const tokenStore = {
+    gameTokens: [{ id: tokenId, name: token.name }],
+    wsConnections: { [tokenId]: { client } },
+    getWebSocketStatus: () =>
+      client.connected && client.ws ? "connected" : "disconnected",
+    sendGetRoleInfo: (_id, params = {}, timeoutMs = 15000) =>
+      client.sendWithPromise("role_getroleinfo", params, timeoutMs),
+    sendMessageWithPromise: (_id, cmd, params = {}, timeoutMs = 8000) =>
+      client.sendWithPromise(cmd, params, timeoutMs),
+  };
+  return tokenStore;
+}
+
+function logResult(results, status, message) {
+  results.push({
+    cmd: "dailyRunner",
+    success: status !== "error",
+    message,
+    status,
+  });
+}
+
+/**
+ * Run the browser's server-driven daily task runner against a Node GameClient.
+ * Account-specific settings can be stored in tokens.daily_settings.
+ */
+export async function runDailyTasks(client, { token, delayMs = 500 } = {}) {
+  const results = [];
+  const tokenStore = createTokenStore(client, token);
+  const runner = new DailyTaskRunner(tokenStore, {
+    commandDelay: delayMs,
+    taskDelay: delayMs,
+  });
+  try {
+    const result = await runner.run(
+      token.id,
+      {
+        shouldStop: () => !client.connected,
+        onLog: ({ message, type = "info" }) =>
+          logResult(results, type, message),
+      },
+      taskSettings(token),
+    );
+    results.push({
+      cmd: "dailyBundle",
+      success: true,
+      message:
+        `服务器每日任务补差完成；待继续 ${result?.incomplete || 0} 项，` +
+        `失败 ${result?.failed || 0} 项`,
+    });
+  } catch (error) {
+    results.push({
+      cmd: "dailyBundle",
+      success: false,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+  return results;
+}
+
+function pickArenaTargetId(targets) {
+  const candidate =
+    targets?.[0] ||
+    targets?.rankList?.[0] ||
+    targets?.roleList?.[0] ||
+    targets?.targets?.[0] ||
+    targets?.targetList?.[0] ||
+    targets?.list?.[0];
+  return (
+    candidate?.roleId ||
+    candidate?.id ||
+    candidate?.targetId ||
+    targets?.roleId ||
+    targets?.id ||
+    targets?.targetId ||
+    null
+  );
+}
+
+/**
+ * Perform the configured daily arena fights and restore the original formation.
+ */
+export async function runArenaFights(client, { token, delayMs = 500 } = {}) {
+  const { results, send } = createRecorder();
+  const settings = taskSettings(token);
+  const role = await send(
+    client,
+    "role_getroleinfo",
+    {},
+    {
+      timeoutMs: 15000,
+    },
+  );
+  const roleData = role?.role || role;
+  const tickets = Number(roleData?.items?.[1007]?.quantity || 0);
+  const fights = Math.min(3, Math.max(0, tickets));
+  if (fights === 0) {
+    results.push({
+      cmd: "arenaFight",
+      success: true,
+      message: "咸神门票为 0，跳过竞技场战斗",
+    });
+    return results;
+  }
+
+  const teamInfo = await send(
+    client,
+    "presetteam_getinfo",
+    {},
+    {
+      timeoutMs: 5000,
+    },
+  );
+  const originalFormation = Number(teamInfo?.presetTeamInfo?.useTeamId || 0);
+  const targetFormation = Number(settings.arenaFormation || 1);
+  const switched =
+    originalFormation > 0 && originalFormation !== targetFormation;
+  if (switched) {
+    await send(
+      client,
+      "presetteam_saveteam",
+      { teamId: targetFormation },
+      { timeoutMs: 5000 },
+    );
+  }
+
+  try {
+    for (let index = 0; index < fights; index += 1) {
+      await send(client, "arena_startarea", {});
+      const targets = await send(client, "arena_getareatarget", {});
+      const targetId = pickArenaTargetId(targets);
+      if (!targetId) {
+        results.push({
+          cmd: "arenaFight",
+          success: false,
+          error: "未找到可用的竞技场目标",
+        });
+        break;
+      }
+      await send(
+        client,
+        "fight_startareaarena",
+        { targetId },
+        { timeoutMs: 15000 },
+      );
+      results.push({
+        cmd: "arenaFight",
+        success: true,
+        message: `竞技场战斗 ${index + 1}/${fights} 完成，目标 ${targetId}`,
+      });
+      await sleep(delayMs);
+    }
+  } finally {
+    if (switched && originalFormation > 0) {
+      await send(
+        client,
+        "presetteam_saveteam",
+        { teamId: originalFormation },
+        { timeoutMs: 5000, tolerateError: true },
+      );
+    }
+  }
+  return results;
 }
 
 /**

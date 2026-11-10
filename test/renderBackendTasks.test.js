@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   __test,
+  runArenaFights,
   runResetBottles,
   runXuanwuBlessing,
 } from "../render-backend/lib/gameTasks.js";
@@ -132,4 +133,62 @@ test("Xuanwu blessing fails before writes when the activity cannot be found", as
     calls.every(({ cmd }) => cmd === "activity_warorderget"),
     "no write command should run before the activity is resolved",
   );
+});
+
+test("arena task fights with available tickets and restores the original formation", async () => {
+  const calls = [];
+  const client = {
+    async sendWithPromise(cmd, params = {}) {
+      calls.push({ cmd, params });
+      if (cmd === "role_getroleinfo") {
+        return { role: { items: { 1007: { quantity: 2 } } } };
+      }
+      if (cmd === "presetteam_getinfo") {
+        return { presetTeamInfo: { useTeamId: 2 } };
+      }
+      if (cmd === "arena_getareatarget") {
+        return { targets: [{ roleId: 9001 }] };
+      }
+      return {};
+    },
+  };
+
+  const results = await runArenaFights(client, {
+    token: { id: "account-a", name: "Test account" },
+    delayMs: 0,
+  });
+
+  assert.equal(
+    calls.filter(({ cmd }) => cmd === "fight_startareaarena").length,
+    2,
+  );
+  assert.deepEqual(
+    calls
+      .filter(({ cmd }) => cmd === "presetteam_saveteam")
+      .map(({ params }) => params.teamId),
+    [1, 2],
+  );
+  assert.equal(
+    results.filter(({ cmd, success }) => cmd === "arenaFight" && success)
+      .length,
+    2,
+  );
+});
+
+test("arena task skips without using formation or battle commands when tickets are zero", async () => {
+  const calls = [];
+  const client = {
+    async sendWithPromise(cmd) {
+      calls.push(cmd);
+      return { role: { items: { 1007: { quantity: 0 } } } };
+    },
+  };
+
+  const results = await runArenaFights(client, {
+    token: { id: "account-a", name: "Test account" },
+    delayMs: 0,
+  });
+
+  assert.deepEqual(calls, ["role_getroleinfo"]);
+  assert.match(results.at(-1).message, /跳过竞技场战斗/);
 });

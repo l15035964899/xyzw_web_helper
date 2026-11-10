@@ -12,8 +12,12 @@ const errorCodeMap = {
   1400010: "没有购买月卡",
   12000116: "今日已领取免费奖励",
   3300060: "扫荡条件不满足",
+  1300050: "请修改您的采购次数",
   200400: "操作太快",
   2300190: "今天已签到",
+  2300370: "俱乐部商品购买数量超出上限",
+  400000: "物品不存在",
+  400190: "没有可领取的签到奖励",
   1000020: "今天已领取",
   700020: "已领取过",
   400010: "物品不足",
@@ -21,6 +25,18 @@ const errorCodeMap = {
   3500020: "没有可领取的奖励",
   200160: "模块未开启",
   200020: "出了点小问题",
+  12400000: "挂机奖励领取过于频繁",
+  7500140: "请先输入密码",
+  7500100: "密码输入错误",
+  7500120: "密码输入错误次数已达上限",
+  200760: "界面已变化，请重新登录",
+  2300070: "未加入俱乐部",
+  2300250: "俱乐部BOSS今日攻打次数已用完",
+  3300050: "购买数量超出限制",
+  7900023: "已达到使用次数上限",
+  4800080: "不在活动时间内或未到报名阶段",
+  4800040: "俱乐部没有报名",
+  2100010: "活动未开放",
 };
 
 // 预注册命令模板
@@ -68,6 +84,7 @@ const CMD_DEFAULTS = {
   mail_getlist: { category: [0, 4, 5], lastId: 0, size: 60 },
   mail_claimallattachment: { category: 0 },
   presetteam_getinfo: {},
+  presetteam_saveteam: { teamId: 1 },
   artifact_lottery: { lotteryNumber: 1, newFree: true, type: 1 },
   genie_sweep: { genieId: 1 },
   mergebox_getinfo: {},
@@ -120,6 +137,10 @@ const RESP_MAP = {
   legion_signinresp: "legion_signin",
   mail_claimallattachmentresp: "mail_claimallattachment",
   presetteam_getinforesp: "presetteam_getinfo",
+  presetteam_saveteamresp: "presetteam_saveteam",
+  friend_batchresp: "friend_batch",
+  fight_startareaarenaresp: "fight_startareaarena",
+  task_claimweekrewardresp: "task_claimweekreward",
   artifact_lotteryresp: "artifact_lottery",
   genie_sweepresp: "genie_sweep",
   mergeboxinforesp: "mergebox_getinfo",
@@ -171,6 +192,7 @@ class GameClient {
     this.heartbeatStartTimer = null;
     this.heartbeatTimer = null;
     this.lastMsgAt = Date.now();
+    this.serverTime = undefined;
     this._log = (...args) =>
       console.log(
         `[${tokenData.name || "?"}]`,
@@ -389,6 +411,7 @@ class GameClient {
 
     const msg = protoMsg._raw;
     if (!msg) return;
+    if (Number.isFinite(msg.time)) this.serverTime = msg.time;
     if (typeof msg.seq === "number" && msg.seq >= 0) this.ack = msg.seq;
 
     const respKey = msg.resp !== undefined ? msg.resp : msg.cmd;

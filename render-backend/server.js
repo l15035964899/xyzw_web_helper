@@ -9,13 +9,27 @@ import express from "express";
 import cron from "node-cron";
 import { createApiKeyMiddleware } from "./lib/apiKeyAuth.js";
 import { GameClient } from "./lib/gameClient.js";
-import { runResetBottles, runXuanwuBlessing } from "./lib/gameTasks.js";
+import {
+  runArenaFights,
+  runDailyTasks,
+  runResetBottles,
+  runXuanwuBlessing,
+} from "./lib/gameTasks.js";
 
 dotenv.config();
 
 // ==================== 工具函数 ====================
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
+}
+
+function shanghaiDateKey(date = new Date()) {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(date);
 }
 
 const app = express();
@@ -62,10 +76,7 @@ const TASK_DEFINITIONS = {
   },
   arenaFight: {
     name: "竞技场",
-    commands: [
-      { cmd: "arena_startarea", params: {} },
-      { cmd: "arena_getareatarget", params: { refresh: false } },
-    ],
+    run: runArenaFights,
   },
   claimMail: {
     name: "领取邮件附件",
@@ -144,16 +155,7 @@ const TASK_DEFINITIONS = {
   },
   dailyBundle: {
     name: "一键日常",
-    commands: [
-      { cmd: "system_signinreward", params: {} },
-      { cmd: "system_claimhangupreward", params: {} },
-      { cmd: "task_claimdailyreward", params: { rewardId: 0 } },
-      { cmd: "tower_getinfo", params: {} },
-      { cmd: "tower_claimreward", params: {} },
-      { cmd: "mail_claimallattachment", params: { category: 0 } },
-      { cmd: "legacy_getinfo", params: {} },
-      { cmd: "legacy_claimhangup", params: {} },
-    ],
+    run: runDailyTasks,
   },
 };
 
@@ -305,7 +307,7 @@ async function executeTaskUnlocked(task) {
 
       for (const { taskDef } of taskDefinitions) {
         const cmdResults = taskDef.run
-          ? await taskDef.run(client)
+          ? await taskDef.run(client, { token, task })
           : await client.executeBatch(taskDef.commands, 800);
 
         for (const result of cmdResults) {
@@ -549,6 +551,34 @@ app.post("/api/tasks/:id/run", async (req, res) => {
   }
   executeTask(task).catch((err) =>
     addLog("ERROR", "api", `手动执行失败: ${err.message}`),
+  );
+  res.json({ status: "running", task: task.name });
+});
+
+app.post("/api/tasks/:id/run-once", async (req, res) => {
+  const { data: task, error } = await supabase
+    .from("cron_tasks")
+    .select("*")
+    .eq("id", req.params.id)
+    .single();
+  if (error || !task) return res.status(404).json({ error: "任务不存在" });
+  if (!task.enabled) {
+    return res.json({ status: "skipped", reason: "task_disabled" });
+  }
+  if (runningTasks.has(task.id)) {
+    return res.status(409).json({ error: "任务正在执行" });
+  }
+  if (
+    task.last_run_at &&
+    shanghaiDateKey(new Date(task.last_run_at)) === shanghaiDateKey()
+  ) {
+    return res.json({ status: "skipped", reason: "already_run_today" });
+  }
+
+  executeTask(task).catch((err) =>
+    addLog("ERROR", "scheduler", `定时兜底执行失败: ${err.message}`, {
+      taskId: task.id,
+    }),
   );
   res.json({ status: "running", task: task.name });
 });
