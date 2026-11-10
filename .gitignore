@@ -57,6 +57,9 @@ scratch/
 # Vite 缓存
 .vite/
 
+# Wrangler 本地状态
+.wrangler/
+
 # Coverage directory used by tools like istanbul
 coverage/
 

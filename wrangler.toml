@@ -1,6 +1,9 @@
 name = "xyzw-web-helper"
-compatibility_date = "2023-12-01"
+main = "./worker.js"
+compatibility_date = "2026-11-10"
 
-[pages_build_config]
-build_command = "npm run build"
-destination_dir = "dist"
+[assets]
+directory = "./dist"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+run_worker_first = ["/api/*"]

@@ -58,6 +58,7 @@
                 >
                   <n-button size="small">导入配置</n-button>
                 </n-upload>
+                <CloudBackendPanel />
               </div>
               <div
                 class="setting-item"
@@ -3059,6 +3060,7 @@ import {
 } from "vue";
 import { $emit } from "@/stores/events/index.ts";
 import { gameTokens, tokenGroups, useTokenStore } from "@/stores/tokenStore";
+import CloudBackendPanel from "@/components/CloudBackendPanel.vue";
 // Import batch task modules
 import {
   addTaskSaveLog,

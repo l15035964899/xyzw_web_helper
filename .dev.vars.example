@@ -1,0 +1,5 @@
+# Cloudflare Worker local development only. Configure production values with
+# `wrangler secret put`; never commit a real `.dev.vars`.
+RENDER_BACKEND_URL=https://xyzw-backend-2x66.onrender.com
+RENDER_API_KEY=replace-with-the-render-api-key
+REMOTE_ACCESS_KEY=replace-with-a-private-browser-access-key
