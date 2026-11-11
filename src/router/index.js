@@ -132,6 +132,15 @@ const my_routes = [
         },
       },
       {
+        path: "server-tasks",
+        name: "ServerTasks",
+        component: () => import("@/views/ServerTasks.vue"),
+        meta: {
+          title: "服务器挂机",
+          requiresToken: false,
+        },
+      },
+      {
         path: "PushingLevels",
         name: "PushingLevels",
         component: () => import("@/views/PushingLevels.vue"),

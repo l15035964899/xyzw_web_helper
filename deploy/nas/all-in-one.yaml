@@ -1,0 +1,37 @@
+services:
+  xyzw-nas-all:
+    image: ghcr.io/l15035964899/xyzw-nas-all:latest
+    container_name: xyzw-nas-all
+    restart: unless-stopped
+    init: true
+    env_file:
+      - .env
+    environment:
+      PORT: "3000"
+      TZ: Asia/Shanghai
+      NODE_ENV: production
+      STORE_MODE: local
+      DATA_DIR: /data
+      FRONTEND_DIR: /app/public
+    ports:
+      - "3002:3000"
+    volumes:
+      - ./data:/data
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - >-
+          fetch('http://127.0.0.1:3000/health')
+          .then((response) => process.exit(response.ok ? 0 : 1))
+          .catch(() => process.exit(1))
+      interval: 30s
+      timeout: 8s
+      start_period: 25s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"

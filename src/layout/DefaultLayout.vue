@@ -51,6 +51,16 @@
             <span>批量日常</span>
           </router-link>
           <router-link
+            to="/admin/server-tasks"
+            class="nav-item"
+            active-class="active"
+          >
+            <n-icon>
+              <Server />
+            </n-icon>
+            <span>服务器挂机</span>
+          </router-link>
+          <router-link
             to="/admin/PushingLevels"
             class="nav-item"
             active-class="active"
@@ -173,6 +183,16 @@
           <span>批量日常</span>
         </router-link>
         <router-link
+          to="/admin/server-tasks"
+          class="drawer-item"
+          @click="isMobileMenuOpen = false"
+        >
+          <n-icon>
+            <Server />
+          </n-icon>
+          <span>服务器挂机</span>
+        </router-link>
+        <router-link
           to="/admin/PushingLevels"
           class="drawer-item"
           @click="isMobileMenuOpen = false"
@@ -243,6 +263,7 @@ import {
   LockOpen,
   Menu,
   PersonCircle,
+  Server,
   Settings,
 } from "@vicons/ionicons5";
 import { useMessage } from "naive-ui";

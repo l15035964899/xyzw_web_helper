@@ -1,0 +1,13 @@
+.git
+.github
+.wrangler
+coverage
+deploy
+dist
+node_modules
+render-backend/node_modules
+scratch
+xyzw_data
+*.log
+.env
+.env.*

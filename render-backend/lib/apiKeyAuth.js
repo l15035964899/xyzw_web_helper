@@ -3,10 +3,15 @@ import process from "node:process";
 /**
  * Protect backend API routes with the configured shared API key.
  * @param {Function} getApiKey Retrieves the current key without retaining a stale environment value.
+ * @param {Function} isAppAuthenticated Allows an already authenticated web session to use the API.
  * @returns {Function} Express middleware accepting x-api-key or Bearer credentials.
  */
-export function createApiKeyMiddleware(getApiKey = () => process.env.API_KEY) {
+export function createApiKeyMiddleware(
+  getApiKey = () => process.env.API_KEY,
+  isAppAuthenticated = () => false,
+) {
   return (req, res, next) => {
+    if (isAppAuthenticated(req)) return next();
     const provided =
       req.header("x-api-key") ||
       req.header("authorization")?.replace(/^Bearer\s+/i, "");

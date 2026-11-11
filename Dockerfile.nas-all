@@ -1,0 +1,40 @@
+FROM node:24-alpine AS frontend
+
+WORKDIR /src
+RUN npm install --global pnpm@10.19.0
+
+COPY package.json pnpm-lock.yaml ./
+RUN pnpm install --frozen-lockfile
+
+COPY . .
+RUN pnpm build
+
+FROM node:24-alpine
+
+RUN apk add --no-cache tzdata
+
+LABEL org.opencontainers.image.title="xyzw-nas-all"
+
+ENV NODE_ENV=production \
+    TZ=Asia/Shanghai \
+    PORT=3000 \
+    STORE_MODE=local \
+    DATA_DIR=/data \
+    FRONTEND_DIR=/app/public
+
+WORKDIR /app
+
+COPY render-backend/package.json render-backend/package-lock.json ./
+RUN npm ci --omit=dev
+
+COPY render-backend/ ./
+COPY --from=frontend /src/dist ./public
+
+RUN mkdir -p /data
+VOLUME ["/data"]
+EXPOSE 3000
+
+HEALTHCHECK --interval=30s --timeout=8s --start-period=25s --retries=3 \
+  CMD node -e "fetch('http://127.0.0.1:3000/health').then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))"
+
+CMD ["node", "server.js"]

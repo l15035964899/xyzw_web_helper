@@ -1,13 +1,17 @@
+import fs from "node:fs";
+import path from "node:path";
 import process from "node:process";
-import { createClient } from "@supabase/supabase-js";
+import { fileURLToPath } from "node:url";
 import cors from "cors";
 /**
- * XYZW 游戏自动化后端 - Express + Supabase + Render
+ * XYZW 游戏自动化后端 - Express + local/Supabase storage
  */
 import dotenv from "dotenv";
 import express from "express";
 import cron from "node-cron";
 import { createApiKeyMiddleware } from "./lib/apiKeyAuth.js";
+import { createAppAuthMiddleware } from "./lib/appAuth.js";
+import { createDataStore } from "./lib/dataStore.js";
 import { GameClient } from "./lib/gameClient.js";
 import {
   runArenaFights,
@@ -18,6 +22,7 @@ import {
 
 dotenv.config();
 process.env.TZ = process.env.TZ || "Asia/Shanghai";
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // ==================== 工具函数 ====================
 function sleep(ms) {
@@ -34,14 +39,19 @@ function shanghaiDateKey(date = new Date()) {
 }
 
 const app = express();
-app.use(cors());
+if (process.env.CORS_ORIGIN) {
+  app.use(
+    cors({
+      origin: process.env.CORS_ORIGIN.split(",")
+        .map((value) => value.trim())
+        .filter(Boolean),
+    }),
+  );
+}
 app.use(express.json());
 
-// ==================== Supabase 客户端 ====================
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_KEY,
-);
+// ==================== 数据存储 ====================
+const dataStore = createDataStore(process.env);
 
 // ==================== 任务定义 ====================
 const TASK_DEFINITIONS = {
@@ -183,16 +193,16 @@ function addLog(level, category, message, meta = {}) {
 
 // ==================== Token 加载 ====================
 async function loadTokens() {
-  const { data, error } = await supabase
-    .from("tokens")
-    .select("*")
-    .eq("enabled", true);
-  if (error) {
-    addLog("ERROR", "supabase", "加载tokens失败", { error: error.message });
+  try {
+    const data = await dataStore.listTokens({ enabledOnly: true });
+    addLog("INFO", "store", `加载${data.length}个tokens`);
+    return data;
+  } catch (error) {
+    addLog("ERROR", "store", "加载tokens失败", {
+      error: error.message,
+    });
     return [];
   }
-  addLog("INFO", "supabase", `加载${data?.length || 0}个tokens`);
-  return data || [];
 }
 
 // ==================== 任务执行引擎 ====================
@@ -350,16 +360,13 @@ async function executeTaskUnlocked(task) {
     await sleep(2000);
   }
 
-  await supabase
-    .from("cron_tasks")
-    .update({ last_run_at: new Date().toISOString() })
-    .eq("id", task.id);
+  await dataStore.markTaskRun(task.id);
   addLog("INFO", "task", `任务完成: ${task.name}`, { taskId: task.id });
 }
 
 async function logToDb(taskId, tokenName, taskType, status, message) {
   try {
-    await supabase.from("task_logs").insert({
+    await dataStore.appendTaskLog({
       task_id: taskId,
       token_name: tokenName,
       task_type: taskType,
@@ -378,11 +385,13 @@ async function registerAllCrons() {
   for (const job of cronJobs.values()) job.stop();
   cronJobs.clear();
 
-  const { data: tasks } = await supabase
-    .from("cron_tasks")
-    .select("*")
-    .eq("enabled", true);
-  if (!tasks) return;
+  let tasks = [];
+  try {
+    tasks = await dataStore.listTasks({ enabledOnly: true });
+  } catch (error) {
+    addLog("ERROR", "cron", "读取定时任务失败", { error: error.message });
+    return;
+  }
 
   for (const task of tasks) {
     registerCron(task);
@@ -423,8 +432,15 @@ function registerCron(task) {
 
 async function init() {
   addLog("INFO", "server", "服务器启动中...");
-  addLog("INFO", "server", `Supabase: ${process.env.SUPABASE_URL}`);
+  addLog(
+    "INFO",
+    "server",
+    dataStore.kind === "local"
+      ? `本地数据目录: ${dataStore.root}`
+      : `Supabase: ${process.env.SUPABASE_URL}`,
+  );
 
+  await dataStore.init();
   await registerAllCrons();
 
   // 每天中午12点清理前一天的任务日志
@@ -436,15 +452,10 @@ async function init() {
         const yesterday = new Date();
         yesterday.setDate(yesterday.getDate() - 1);
         yesterday.setHours(0, 0, 0, 0);
-        const { error } = await supabase
-          .from("task_logs")
-          .delete()
-          .lt("created_at", yesterday.toISOString());
-        if (error) {
-          addLog("ERROR", "cron", "日志清理失败", { error: error.message });
-        } else {
-          addLog("INFO", "cron", "已清理前一天及更早的任务日志");
-        }
+        const deleted = await dataStore.deleteTaskLogsBefore(
+          yesterday.toISOString(),
+        );
+        addLog("INFO", "cron", `已清理 ${deleted} 条旧任务日志`);
       } catch (err) {
         addLog("ERROR", "cron", "日志清理异常", { error: err.message });
       }
@@ -471,85 +482,112 @@ app.get("/health", (req, res) => {
     time: new Date().toISOString(),
     activeCrons: cronJobs.size,
     logsInMemory: logs.length,
+    storage: dataStore.kind,
   });
 });
 
-// Every API route uses the same credentials; /health remains public.
-app.use("/api", createApiKeyMiddleware());
+app.use(createAppAuthMiddleware());
+// API routes accept either the shared API key or the authenticated web session.
+app.use(
+  "/api",
+  createApiKeyMiddleware(
+    () => process.env.API_KEY,
+    (req) => req.appUserAuthenticated,
+  ),
+);
 
 app.get("/api/tokens", async (req, res) => {
-  const { data, error } = await supabase
-    .from("tokens")
-    .select("*")
-    .order("created_at");
-  if (error) return res.status(500).json({ error: error.message });
-  res.json(data);
+  try {
+    res.json(await dataStore.listTokens());
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
 app.post("/api/tokens", async (req, res) => {
-  const { data, error } = await supabase
-    .from("tokens")
-    .insert(req.body)
-    .select();
-  if (error) return res.status(400).json({ error: error.message });
-  res.json(data);
+  try {
+    const created = await dataStore.createToken(req.body);
+    res.json([created]);
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+app.patch("/api/tokens/:id", async (req, res) => {
+  try {
+    const updated = await dataStore.updateToken(req.params.id, req.body);
+    if (!updated) return res.status(404).json({ error: "账号不存在" });
+    res.json([updated]);
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
 });
 
 app.delete("/api/tokens/:id", async (req, res) => {
-  const { error } = await supabase
-    .from("tokens")
-    .delete()
-    .eq("id", req.params.id);
-  if (error) return res.status(400).json({ error: error.message });
-  res.json({ ok: true });
+  try {
+    await dataStore.deleteToken(req.params.id);
+    res.json({ ok: true });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
 });
 
 app.get("/api/tasks", async (req, res) => {
-  const { data, error } = await supabase
-    .from("cron_tasks")
-    .select("*")
-    .order("created_at");
-  if (error) return res.status(500).json({ error: error.message });
-  res.json(data);
+  try {
+    res.json(await dataStore.listTasks());
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
 app.post("/api/tasks", async (req, res) => {
-  const { data, error } = await supabase
-    .from("cron_tasks")
-    .insert(req.body)
-    .select();
-  if (error) return res.status(400).json({ error: error.message });
-  if (data && data[0]) registerCron(data[0]);
-  res.json(data);
+  try {
+    const cronExpr =
+      req.body.cron_expr || req.body.cron_expression || req.body.cron;
+    if (!cron.validate(cronExpr)) {
+      return res.status(400).json({ error: "Cron 表达式无效" });
+    }
+    const created = await dataStore.createTask(req.body);
+    registerCron(created);
+    res.json([created]);
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
 });
 
 app.patch("/api/tasks/:id", async (req, res) => {
-  const { data, error } = await supabase
-    .from("cron_tasks")
-    .update(req.body)
-    .eq("id", req.params.id)
-    .select();
-  if (error) return res.status(400).json({ error: error.message });
-  await registerAllCrons();
-  res.json(data);
+  try {
+    const current = await dataStore.getTask(req.params.id);
+    if (!current) return res.status(404).json({ error: "任务不存在" });
+    const cronExpr =
+      req.body.cron_expr ||
+      req.body.cron_expression ||
+      req.body.cron ||
+      current.cron_expr ||
+      current.cron_expression;
+    if (!cron.validate(cronExpr)) {
+      return res.status(400).json({ error: "Cron 表达式无效" });
+    }
+    const updated = await dataStore.updateTask(req.params.id, req.body);
+    await registerAllCrons();
+    res.json([updated]);
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
 });
 
 app.delete("/api/tasks/:id", async (req, res) => {
-  const { error } = await supabase
-    .from("cron_tasks")
-    .delete()
-    .eq("id", req.params.id);
-  if (error) return res.status(400).json({ error: error.message });
-  await registerAllCrons();
-  res.json({ ok: true });
+  try {
+    await dataStore.deleteTask(req.params.id);
+    await registerAllCrons();
+    res.json({ ok: true });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
 });
 
 app.post("/api/tasks/:id/run", async (req, res) => {
-  const { data: task } = await supabase
-    .from("cron_tasks")
-    .select("*")
-    .eq("id", req.params.id)
-    .single();
+  const task = await dataStore.getTask(req.params.id);
   if (!task) return res.status(404).json({ error: "任务不存在" });
   if (runningTasks.has(task.id)) {
     return res.status(409).json({ error: "任务正在执行" });
@@ -561,12 +599,8 @@ app.post("/api/tasks/:id/run", async (req, res) => {
 });
 
 app.post("/api/tasks/:id/run-once", async (req, res) => {
-  const { data: task, error } = await supabase
-    .from("cron_tasks")
-    .select("*")
-    .eq("id", req.params.id)
-    .single();
-  if (error || !task) return res.status(404).json({ error: "任务不存在" });
+  const task = await dataStore.getTask(req.params.id);
+  if (!task) return res.status(404).json({ error: "任务不存在" });
   if (!task.enabled) {
     return res.json({ status: "skipped", reason: "task_disabled" });
   }
@@ -593,12 +627,8 @@ app.post("/api/tasks/:id/run-if-due", async (req, res) => {
     Number.parseInt(req.query.minIntervalMinutes) || 285,
     60,
   );
-  const { data: task, error } = await supabase
-    .from("cron_tasks")
-    .select("*")
-    .eq("id", req.params.id)
-    .single();
-  if (error || !task) return res.status(404).json({ error: "任务不存在" });
+  const task = await dataStore.getTask(req.params.id);
+  if (!task) return res.status(404).json({ error: "任务不存在" });
   if (!task.enabled) {
     return res.json({ status: "skipped", reason: "task_disabled" });
   }
@@ -628,13 +658,11 @@ app.get("/api/logs", (req, res) => {
 
 app.get("/api/logs/db", async (req, res) => {
   const limit = Math.min(Number.parseInt(req.query.limit) || 100, 500);
-  const { data, error } = await supabase
-    .from("task_logs")
-    .select("*")
-    .order("created_at", { ascending: false })
-    .limit(limit);
-  if (error) return res.status(500).json({ error: error.message });
-  res.json(data);
+  try {
+    res.json(await dataStore.listTaskLogs(limit));
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
 app.get("/api/task-definitions", (req, res) => {
@@ -647,9 +675,33 @@ app.get("/api/task-definitions", (req, res) => {
   res.json(list);
 });
 
-const PORT = process.env.PORT || 3000;
-init().then(() => {
-  app.listen(PORT, () => {
-    addLog("INFO", "server", `监听端口 ${PORT}`);
+const frontendDir = path.resolve(
+  process.env.FRONTEND_DIR || path.join(__dirname, "public"),
+);
+const frontendIndex = path.join(frontendDir, "index.html");
+if (fs.existsSync(frontendIndex)) {
+  app.use(
+    express.static(frontendDir, {
+      index: false,
+      maxAge: process.env.NODE_ENV === "production" ? "1h" : 0,
+    }),
+  );
+  app.get("*", (req, res, next) => {
+    if (req.path === "/health" || req.path.startsWith("/api/")) {
+      return next();
+    }
+    res.sendFile(frontendIndex);
   });
-});
+}
+
+const PORT = process.env.PORT || 3000;
+init()
+  .then(() => {
+    app.listen(PORT, () => {
+      addLog("INFO", "server", `监听端口 ${PORT}`);
+    });
+  })
+  .catch((error) => {
+    console.error("服务器启动失败:", error);
+    process.exitCode = 1;
+  });
