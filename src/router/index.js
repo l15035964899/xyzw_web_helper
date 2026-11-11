@@ -217,9 +217,12 @@ router.beforeEach((to, from, next) => {
   // 检查是否需要Token
   if (to.meta.requiresToken && !tokenStore.hasTokens) {
     next("/tokens");
-  } else if (to.path === "/" && tokenStore.hasTokens) {
-    // 首页重定向逻辑
-    if (tokenStore.selectedToken) {
+  } else if (to.path === "/") {
+    // The self-hosted NAS entry must stay inside the admin layout so the
+    // server-task navigation is visible even when this browser has no token.
+    if (!tokenStore.hasTokens) {
+      next("/admin/server-tasks");
+    } else if (tokenStore.selectedToken) {
       next("/admin/dashboard");
     } else {
       next("/tokens");
