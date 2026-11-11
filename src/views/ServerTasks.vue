@@ -819,6 +819,14 @@ th {
   white-space: nowrap;
 }
 
+.actions :deep(.n-button) {
+  margin-left: 8px;
+}
+
+.actions :deep(.n-button:first-child) {
+  margin-left: 0;
+}
+
 .empty-cell {
   padding: 28px;
   color: var(--text-secondary);
