@@ -69,7 +69,7 @@ async function request(path, options = {}) {
     if (error instanceof RemoteBackendError) throw error;
     if (error?.name === "AbortError") {
       throw new RemoteBackendError(
-        "云端服务响应超时；Render 免费实例可能正在冷启动，请稍后重试",
+        "云端服务响应超时；请检查 NAS 后端和公网映射是否正常",
         408,
       );
     }

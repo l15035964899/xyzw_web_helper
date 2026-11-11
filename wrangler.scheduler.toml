@@ -3,7 +3,7 @@ main = "./scheduler-worker.js"
 compatibility_date = "2026-11-10"
 
 [vars]
-RENDER_BACKEND_URL = "https://xyzw-backend-2x66.onrender.com"
+RENDER_BACKEND_URL = "https://nas.lfhdrt.vip:3003"
 DAILY_TASK_ID = "c193bc85-fb2c-4d67-8a7e-5083c7fdd100"
 ARENA_TASK_ID = "2306c0d6-899d-4d22-8d8f-ff76e4333934"
 RECURRING_TASK_ID = "b8cd7855-d95e-4472-9aab-9e2d8e528dd2"

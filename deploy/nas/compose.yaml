@@ -1,7 +1,6 @@
 services:
   xyzw-backend:
-    build:
-      context: ./render-backend
+    image: ghcr.io/l15035964899/xyzw-backend:latest
     container_name: xyzw-backend-nas
     restart: unless-stopped
     init: true

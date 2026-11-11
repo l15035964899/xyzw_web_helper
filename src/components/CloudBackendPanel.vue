@@ -2,11 +2,11 @@
   <n-button size="small" type="info" @click="openPanel">云端任务</n-button>
 
   <n-drawer v-model:show="showPanel" :width="720" placement="right">
-    <n-drawer-content title="Render + Supabase 云端任务" closable>
+    <n-drawer-content title="NAS + Supabase 云端任务" closable>
       <n-space vertical :size="16">
         <n-alert type="warning" :bordered="false">
-          云端任务启用后会由 Render 按 Cron 自动执行。切换前请先停用 NAS
-          上相同的任务，避免重复操作游戏账号。
+          NAS 后端常驻运行定时任务，Supabase 保存任务与账号数据，Cloudflare
+          提供网页和管理接口。
         </n-alert>
 
         <n-space align="center" justify="space-between">
@@ -177,7 +177,7 @@ const supportedTaskKeys = computed(
 const healthText = computed(() => {
   if (loading.value) return "正在连接";
   if (!health.value) return "未连接";
-  return health.value.status === "ok" ? "Render 正常" : "状态异常";
+  return health.value.status === "ok" ? "NAS 正常" : "状态异常";
 });
 const healthTagType = computed(() => {
   if (loading.value) return "info";
