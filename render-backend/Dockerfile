@@ -1,5 +1,7 @@
 FROM node:24-alpine
 
+LABEL org.opencontainers.image.title="xyzw-backend"
+
 ENV NODE_ENV=production
 WORKDIR /app
 
