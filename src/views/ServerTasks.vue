@@ -348,6 +348,7 @@ import {
 } from "@/api/serverTasks";
 import { useTokenStore } from "@/stores/tokenStore";
 import { formatLogMessage, taskTypeLabel } from "@/utils/serverTaskLog";
+import { createBrowserTokenValue } from "@/utils/serverTaskToken";
 
 const message = useMessage();
 const dialog = useDialog();
@@ -627,27 +628,33 @@ async function importBackup(event) {
 }
 
 async function syncAccountsToLocal() {
-  let imported = 0;
+  let created = 0;
+  let updated = 0;
   for (const account of accounts.value) {
-    const existing = tokenStore.gameTokens.some(
-      (token) => token.id === account.id,
-    );
-    if (existing) continue;
     const parsed = decodeTokenPayload(account.token);
-    tokenStore.addToken({
-      id: account.id,
-      name: account.name,
-      token: parsed.roleToken,
+    const fields = {
+      token: createBrowserTokenValue(parsed),
       wsUrl: account.ws_url || null,
       server: account.server || "",
       roleId: parsed.roleId ?? account.roleId ?? null,
-      importMethod: "manual",
-    });
-    imported += 1;
+    };
+    const existing = tokenStore.gameTokens.find(
+      (token) => token.id === account.id,
+    );
+    if (existing) {
+      tokenStore.updateToken(account.id, fields);
+      updated += 1;
+    } else {
+      tokenStore.addToken({
+        id: account.id,
+        name: account.name,
+        ...fields,
+        importMethod: "manual",
+      });
+      created += 1;
+    }
   }
-  message.success(
-    imported ? `已同步 ${imported} 个账号到本机` : "本机已包含全部服务器账号",
-  );
+  message.success(`已同步服务器账号：新增 ${created} 个，修复 ${updated} 个`);
 }
 
 function openTaskDialog(task = null) {
