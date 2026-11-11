@@ -19,6 +19,7 @@ import {
   runResetBottles,
   runXuanwuBlessing,
 } from "./lib/gameTasks.js";
+import { formatTaskLogMessage } from "./lib/taskLogDescriptions.js";
 
 dotenv.config();
 process.env.TZ = process.env.TZ || "Asia/Shanghai";
@@ -326,25 +327,30 @@ async function executeTaskUnlocked(task) {
           : await client.executeBatch(taskDef.commands, 800);
 
         for (const result of cmdResults) {
+          const status = result.success ? "success" : "error";
           const detail =
             result.message || (result.success ? "OK" : result.error);
+          const logMessage = formatTaskLogMessage({
+            taskType: result.cmd,
+            status,
+            message: detail,
+          });
           addLog(
             result.success ? "INFO" : "ERROR",
             "task",
-            `[${token.name}] ${result.cmd}: ${detail}`,
+            `[${token.name}] ${logMessage}`,
             { taskId: task.id },
           );
-          await logToDb(
-            task.id,
-            token.name,
-            result.cmd,
-            result.success ? "success" : "error",
-            result.success ? result.message : result.error,
-          );
+          await logToDb(task.id, token.name, result.cmd, status, logMessage);
         }
       }
     } catch (err) {
-      addLog("ERROR", "task", `执行失败 (${token.name}): ${err.message}`, {
+      const logMessage = formatTaskLogMessage({
+        taskType: taskKeys.join(","),
+        status: "error",
+        message: err.message,
+      });
+      addLog("ERROR", "task", `[${token.name}] ${logMessage}`, {
         taskId: task.id,
       });
       await logToDb(
@@ -352,7 +358,7 @@ async function executeTaskUnlocked(task) {
         token.name,
         taskKeys.join(","),
         "error",
-        err.message,
+        logMessage,
       );
     } finally {
       client.disconnect();

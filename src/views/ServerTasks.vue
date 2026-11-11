@@ -199,10 +199,15 @@
                   {{ String(entry.status || "info").toUpperCase() }}
                 </n-tag>
               </td>
-              <td>{{ entry.task_type || "-" }}</td>
+              <td class="log-category">
+                <div>{{ taskTypeLabel(entry.task_type) }}</div>
+                <code>{{ entry.task_type || "-" }}</code>
+              </td>
               <td>
-                <span v-if="entry.token_name">{{ entry.token_name }}：</span>
-                {{ entry.message || "-" }}
+                <span v-if="entry.token_name" class="log-account">
+                  {{ entry.token_name }}
+                </span>
+                {{ formatLogMessage(entry) }}
               </td>
             </tr>
             <tr v-if="!logs.length">
@@ -342,6 +347,7 @@ import {
   serverRequest,
 } from "@/api/serverTasks";
 import { useTokenStore } from "@/stores/tokenStore";
+import { formatLogMessage, taskTypeLabel } from "@/utils/serverTaskLog";
 
 const message = useMessage();
 const dialog = useDialog();
@@ -835,6 +841,18 @@ th {
 
 .logs td:last-child {
   min-width: 420px;
+}
+
+.log-category code {
+  display: block;
+  margin-top: 4px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.log-account {
+  margin-right: 8px;
+  font-weight: 600;
 }
 
 code {
