@@ -9,8 +9,4 @@ ARENA_TASK_ID = "2306c0d6-899d-4d22-8d8f-ff76e4333934"
 RECURRING_TASK_ID = "b8cd7855-d95e-4472-9aab-9e2d8e528dd2"
 
 [triggers]
-crons = [
-  "1,10 16 * * *",
-  "0,10 0 * * *",
-  "10 17,22,3,8,13 * * *",
-]
+crons = []
