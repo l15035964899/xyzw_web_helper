@@ -42,3 +42,40 @@ test("backend connection logs omit credential queries and early close clears the
   assert.equal(JSON.stringify(logs).includes("secret-test-token"), false);
   assert.equal(logs[0][1], "wss://xxz-xyzw.hortorgames.com/agent");
 });
+
+test("battle commands fetch the current battle version and inject it once", async () => {
+  const { GameClient } = await loadModule(
+    new URL("../render-backend/lib/gameClient.js", import.meta.url),
+    {
+      "./bonProtocol.js": {},
+      ws: { default: class Socket {} },
+    },
+  );
+  const client = new GameClient({ roleToken: "secret-test-token", roleId: 1 });
+  const calls = [];
+  client._sendWithPromise = async (cmd, params = {}) => {
+    calls.push({ cmd, params });
+    if (cmd === "fight_startlevel") {
+      return { battleData: { version: 240999 } };
+    }
+    return { ok: true };
+  };
+
+  await client.sendWithPromise("arena_startarea");
+  await client.sendWithPromise("fight_startareaarena", { targetId: 9001 });
+  await client.sendWithPromise("fight_startareaarena", { targetId: 9002 });
+
+  assert.deepEqual(
+    calls.map(({ cmd }) => cmd),
+    [
+      "arena_startarea",
+      "fight_startlevel",
+      "fight_startareaarena",
+      "fight_startareaarena",
+    ],
+  );
+  assert.equal(calls[2].params.battleVersion, 240999);
+  assert.equal(calls[2].params.targetId, 9001);
+  assert.equal(calls[3].params.battleVersion, 240999);
+  assert.equal(calls[3].params.targetId, 9002);
+});

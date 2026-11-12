@@ -37,7 +37,18 @@ const errorCodeMap = {
   4800080: "不在活动时间内或未到报名阶段",
   4800040: "俱乐部没有报名",
   2100010: "活动未开放",
+  200750: "战斗版本已失效，请刷新战斗数据后重试",
 };
+
+const BATTLE_VERSION_COMMANDS = new Set([
+  "fight_startareaarena",
+  "fight_startpvp",
+  "fight_starttower",
+  "fight_startboss",
+  "fight_startlegionboss",
+  "fight_startdungeon",
+  "fight_level",
+]);
 
 // 预注册命令模板
 const CMD_DEFAULTS = {
@@ -193,6 +204,8 @@ class GameClient {
     this.heartbeatTimer = null;
     this.lastMsgAt = Date.now();
     this.serverTime = undefined;
+    this.battleVersion = null;
+    this.battleVersionPromise = null;
     this._log = (...args) =>
       console.log(
         `[${tokenData.name || "?"}]`,
@@ -281,6 +294,8 @@ class GameClient {
     const socket = this.ws;
     this.ws = null;
     this.connected = false;
+    this.battleVersion = null;
+    this.battleVersionPromise = null;
     this._stopHeartbeat();
     clearTimeout(this.connectionTimer);
     this.connectionTimer = null;
@@ -330,7 +345,46 @@ class GameClient {
    * @param {number} timeoutMs Maximum response wait in milliseconds.
    * @returns {Promise<object>} Decoded server response.
    */
-  sendWithPromise(cmd, params = {}, timeoutMs = 8000) {
+  async sendWithPromise(cmd, params = {}, timeoutMs = 8000) {
+    let requestParams = params;
+    if (BATTLE_VERSION_COMMANDS.has(cmd)) {
+      const battleVersion =
+        params?.battleVersion == null
+          ? await this.ensureBattleVersion()
+          : params.battleVersion;
+      requestParams = { battleVersion, ...params };
+    }
+    return this._sendWithPromise(cmd, requestParams, timeoutMs);
+  }
+
+  async ensureBattleVersion() {
+    if (this.battleVersion != null) return this.battleVersion;
+    if (!this.battleVersionPromise) {
+      const pending = this._fetchBattleVersion();
+      const tracked = pending.finally(() => {
+        if (this.battleVersionPromise === tracked) {
+          this.battleVersionPromise = null;
+        }
+      });
+      this.battleVersionPromise = tracked;
+    }
+    return this.battleVersionPromise;
+  }
+
+  async _fetchBattleVersion() {
+    const response = await this._sendWithPromise("fight_startlevel", {}, 8000);
+    const version = response?.battleData?.version;
+    if (version === undefined || version === null) {
+      throw new Error(
+        "获取战斗版本失败: fight_startlevel 未返回 battleData.version",
+      );
+    }
+    this.battleVersion = version;
+    this.log("获取战斗版本:", version);
+    return version;
+  }
+
+  _sendWithPromise(cmd, params = {}, timeoutMs = 8000) {
     return new Promise((resolve, reject) => {
       if (!this.connected || this.ws?.readyState !== WebSocket.OPEN) {
         return reject(new Error("未连接"));

@@ -27,6 +27,10 @@ test("known and unknown game errors are expanded for reusable log displays", () 
     "游戏服务器未返回具体原因，请稍后重试并确认该操作状态（错误码 800040）",
   );
   assert.equal(
+    explainLogError("[200750] 未知错误"),
+    "战斗版本已失效，请刷新战斗数据后重试（错误码 200750）",
+  );
+  assert.equal(
     formatLogMessage({
       task_type: "legacy_claimhangup",
       status: "error",
