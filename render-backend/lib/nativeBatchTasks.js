@@ -13,6 +13,19 @@ const FISH_TARGET = 320;
 const ARENA_TARGET = 240;
 const DEFAULT_WEIRD_TOWER_MAX_CLIMB = 100;
 const LEGACY_ITEM_ID = 37007;
+const ACCOUNT_SETTINGS_DEFAULTS = {
+  arenaFormation: 1,
+  towerFormation: 1,
+  bossFormation: 1,
+  bossTimes: 2,
+  claimBottle: true,
+  payRecruit: true,
+  openBox: true,
+  arenaEnable: true,
+  claimHangUp: true,
+  claimEmail: true,
+  blackMarketPurchase: true,
+};
 
 const DEFAULT_DREAM_PURCHASES = [
   "1-5",
@@ -85,6 +98,21 @@ function numberOption(options, key, fallback, { min, max } = {}) {
 function stringOption(options, key, fallback = "") {
   const value = options?.[key];
   return typeof value === "string" ? value.trim() : fallback;
+}
+
+function accountSettings(token) {
+  let stored = token?.daily_settings;
+  if (typeof stored === "string") {
+    try {
+      stored = JSON.parse(stored);
+    } catch {
+      stored = {};
+    }
+  }
+  return {
+    ...ACCOUNT_SETTINGS_DEFAULTS,
+    ...(stored && typeof stored === "object" ? stored : {}),
+  };
 }
 
 function requiredNumberOption(options, key) {
@@ -264,10 +292,11 @@ async function runHangUp(client, token, task, claimReward) {
 }
 
 async function runClimbTower(client, token, task) {
-  const { options, send } = createRunner(client, token, task);
+  const { send } = createRunner(client, token, task);
+  const settings = accountSettings(token);
   const formation = await switchFormation(
     client,
-    numberOption(options, "towerFormation", 1, { min: 1, max: 6 }),
+    numberOption(settings, "towerFormation", 1, { min: 1, max: 6 }),
   );
   let count = 0;
   let failures = 0;
@@ -316,9 +345,10 @@ async function runClimbTower(client, token, task) {
 
 async function runClimbWeirdTower(client, token, task) {
   const { options, send } = createRunner(client, token, task);
+  const settings = accountSettings(token);
   const formation = await switchFormation(
     client,
-    numberOption(options, "weirdTowerFormation", 1, { min: 1, max: 6 }),
+    numberOption(settings, "towerFormation", 1, { min: 1, max: 6 }),
   );
   const maxClimb = numberOption(
     options,
@@ -868,7 +898,8 @@ async function runTopUpFish(client, token, task) {
 }
 
 async function runTopUpArena(client, token, task) {
-  const { options, send } = createRunner(client, token, task);
+  const { send } = createRunner(client, token, task);
+  const settings = accountSettings(token);
   const activity = getActivity(await send("activity_get", {}, 10000));
   const current = Number(activity?.myArenaInfo?.num || 0);
   const target = monthTarget(ARENA_TARGET);
@@ -882,7 +913,7 @@ async function runTopUpArena(client, token, task) {
   }
   const formation = await switchFormation(
     client,
-    numberOption(options, "arenaFormation", 1, { min: 1, max: 6 }),
+    numberOption(settings, "arenaFormation", 1, { min: 1, max: 6 }),
   );
   let fought = 0;
   try {
@@ -1188,10 +1219,10 @@ async function buildCampTeam(client, formationId = 1) {
 }
 
 async function runCampChallenge(client, token, task, { pet = false } = {}) {
-  const { options } = createRunner(client, token, task);
+  const settings = accountSettings(token);
   const teamSetParams = await buildCampTeam(
     client,
-    numberOption(options, "arenaFormation", 1, { min: 1, max: 6 }),
+    numberOption(settings, "arenaFormation", 1, { min: 1, max: 6 }),
   );
   let attacks = 0;
   if (pet) {
@@ -1364,17 +1395,6 @@ async function runLegacyGift(client, token, task) {
   };
 }
 
-const formationOption = (key = "arenaFormation", label = "阵容") => ({
-  key,
-  label,
-  type: "select",
-  default: 1,
-  options: [1, 2, 3, 4, 5, 6].map((value) => ({
-    label: `阵容${value}`,
-    value,
-  })),
-});
-
 export const NATIVE_TASK_GROUPS = [
   { key: "daily", label: "日常" },
   { key: "dungeon", label: "副本" },
@@ -1406,13 +1426,11 @@ export const NATIVE_TASK_CATALOG = {
   climbTower: {
     name: "一键爬塔",
     group: "dungeon",
-    options: [formationOption("towerFormation", "爬塔阵容")],
   },
   climbWeirdTower: {
     name: "一键爬怪异塔",
     group: "weirdTower",
     options: [
-      formationOption("weirdTowerFormation", "怪异塔阵容"),
       {
         key: "weirdTowerMaxClimb",
         label: "最多挑战次数",
@@ -1536,12 +1554,10 @@ export const NATIVE_TASK_CATALOG = {
   batchCampChallenge: {
     name: "营地挑战",
     group: "daily",
-    options: [formationOption()],
   },
   batchCampChallengePet: {
     name: "营地挑战宠物",
     group: "daily",
-    options: [formationOption()],
   },
   batchCampClaimTasks: {
     name: "领取营地任务奖励",
@@ -1564,13 +1580,11 @@ export const NATIVE_TASK_CATALOG = {
   batcharenafight: {
     name: "一键竞技场战斗3次",
     group: "daily",
-    options: [formationOption()],
   },
   batchTopUpFish: { name: "一键钓鱼补齐", group: "monthly" },
   batchTopUpArena: {
     name: "一键竞技场补齐",
     group: "monthly",
-    options: [formationOption()],
   },
   batchClaimFreeEnergy: {
     name: "一键领取怪异塔免费道具",

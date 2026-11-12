@@ -128,3 +128,37 @@ test("already-completed club sign-in is treated as a successful skip", async () 
   assert.equal(results[0].success, true);
   assert.match(results[0].message, /已经签到/);
 });
+
+test("arena task uses each account's own formation setting", async () => {
+  const calls = [];
+  const client = {
+    async sendWithPromise(cmd, params = {}) {
+      calls.push({ cmd, params });
+      if (cmd === "role_getroleinfo") {
+        return { role: { items: { 1007: { quantity: 1 } } } };
+      }
+      if (cmd === "presetteam_getinfo") {
+        return { presetTeamInfo: { useTeamId: 2 } };
+      }
+      if (cmd === "arena_getareatarget") {
+        return { targets: [{ roleId: 9001 }] };
+      }
+      return {};
+    },
+  };
+  await runNativeBatchTask("batcharenafight", client, {
+    token: {
+      ...token(),
+      daily_settings: { arenaFormation: 4 },
+    },
+    task: {
+      options: { arenaFormation: 1 },
+    },
+  });
+  assert.deepEqual(
+    calls
+      .filter(({ cmd }) => cmd === "presetteam_saveteam")
+      .map(({ params }) => params.teamId),
+    [4, 2],
+  );
+});

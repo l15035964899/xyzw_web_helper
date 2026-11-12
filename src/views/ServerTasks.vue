@@ -59,6 +59,13 @@
             @change="importBackup"
           />
           <n-button @click="backupInput?.click()">导入完整备份</n-button>
+          <n-button
+            :disabled="!tokenStore.gameTokens.length"
+            :loading="saving"
+            @click="syncLocalAccounts"
+          >
+            同步本机账号和设置
+          </n-button>
           <n-button :disabled="!accounts.length" @click="syncAccountsToLocal">
             同步到本机
           </n-button>
@@ -93,6 +100,13 @@
                 </n-tag>
               </td>
               <td class="actions">
+                <n-button
+                  text
+                  type="primary"
+                  @click="openAccountSettings(account)"
+                >
+                  设置
+                </n-button>
                 <n-button text type="primary" @click="toggleAccount(account)">
                   {{ account.enabled ? "停用" : "启用" }}
                 </n-button>
@@ -236,6 +250,88 @@
               @click="addManualAccount"
             >
               添加
+            </n-button>
+          </n-space>
+        </n-space>
+      </n-card>
+    </n-modal>
+
+    <n-modal v-model:show="accountSettingsVisible">
+      <n-card
+        class="account-settings-dialog"
+        :title="`账号任务设置 - ${accountSettingsAccount?.name || ''}`"
+      >
+        <n-space vertical :size="16">
+          <div class="account-settings-grid">
+            <div class="field">
+              <label>竞技场阵容</label>
+              <n-select
+                v-model:value="accountSettings.arenaFormation"
+                :options="formationOptions"
+              />
+            </div>
+            <div class="field">
+              <label>爬塔阵容</label>
+              <n-select
+                v-model:value="accountSettings.towerFormation"
+                :options="formationOptions"
+              />
+            </div>
+            <div class="field">
+              <label>BOSS阵容</label>
+              <n-select
+                v-model:value="accountSettings.bossFormation"
+                :options="formationOptions"
+              />
+            </div>
+            <div class="field">
+              <label>BOSS次数</label>
+              <n-select
+                v-model:value="accountSettings.bossTimes"
+                :options="bossTimesOptions"
+              />
+            </div>
+          </div>
+
+          <div class="settings-switches">
+            <label>
+              <span>领罐子</span>
+              <n-switch v-model:value="accountSettings.claimBottle" />
+            </label>
+            <label>
+              <span>领挂机</span>
+              <n-switch v-model:value="accountSettings.claimHangUp" />
+            </label>
+            <label>
+              <span>竞技场</span>
+              <n-switch v-model:value="accountSettings.arenaEnable" />
+            </label>
+            <label>
+              <span>开宝箱</span>
+              <n-switch v-model:value="accountSettings.openBox" />
+            </label>
+            <label>
+              <span>领取邮件奖励</span>
+              <n-switch v-model:value="accountSettings.claimEmail" />
+            </label>
+            <label>
+              <span>黑市购买物品</span>
+              <n-switch v-model:value="accountSettings.blackMarketPurchase" />
+            </label>
+            <label>
+              <span>付费招募</span>
+              <n-switch v-model:value="accountSettings.payRecruit" />
+            </label>
+          </div>
+
+          <n-space justify="end">
+            <n-button @click="accountSettingsVisible = false">取消</n-button>
+            <n-button
+              type="primary"
+              :loading="saving"
+              @click="saveAccountSettings"
+            >
+              保存设置
             </n-button>
           </n-space>
         </n-space>
@@ -399,6 +495,14 @@
                   @change="toggleDraftValue('selected_tokens', account.id)"
                 />
                 <span>{{ account.name }}</span>
+                <n-button
+                  text
+                  size="tiny"
+                  class="account-settings-button"
+                  @click.prevent.stop="openAccountSettings(account)"
+                >
+                  设置
+                </n-button>
               </label>
             </div>
           </div>
@@ -497,6 +601,7 @@ import { useTokenStore } from "@/stores/tokenStore";
 import { goldItemsConfig, merchantConfig } from "@/utils/dreamConstants";
 import { formatLogMessage, taskTypeLabel } from "@/utils/serverTaskLog";
 import { createBrowserTokenValue } from "@/utils/serverTaskToken";
+import { syncLocalTokensToServer } from "@/utils/serverTokenSync";
 
 const message = useMessage();
 const dialog = useDialog();
@@ -517,6 +622,8 @@ const manualAccountVisible = ref(false);
 const taskDialogVisible = ref(false);
 const dreamConfigVisible = ref(false);
 const dreamConfigDraft = ref([]);
+const accountSettingsVisible = ref(false);
+const accountSettingsAccount = ref(null);
 const manualAccount = reactive({ name: "", token: "" });
 let autoRefreshTimer = null;
 
@@ -537,6 +644,16 @@ const taskGroups = [
   { key: "legacy", label: "功法" },
   { key: "monthly", label: "月度" },
 ];
+
+const formationOptions = [1, 2, 3, 4, 5, 6].map((value) => ({
+  label: `阵容${value}`,
+  value,
+}));
+const bossTimesOptions = [0, 1, 2, 3, 4].map((value) => ({
+  label: `${value}次`,
+  value,
+}));
+const accountSettings = reactive(defaultAccountSettings());
 
 const legacyTaskAliases = {
   dailyBundle: "startBatch",
@@ -592,6 +709,22 @@ function emptyTask() {
     selected_tokens: [],
     options: {},
     enabled: true,
+  };
+}
+
+function defaultAccountSettings() {
+  return {
+    arenaFormation: 1,
+    towerFormation: 1,
+    bossFormation: 1,
+    bossTimes: 2,
+    claimBottle: true,
+    payRecruit: true,
+    openBox: true,
+    arenaEnable: true,
+    claimHangUp: true,
+    claimEmail: true,
+    blackMarketPurchase: true,
   };
 }
 
@@ -721,6 +854,48 @@ async function toggleAccount(account) {
     await loadAccounts();
   } catch (error) {
     message.error(error.message);
+  }
+}
+
+function openAccountSettings(account) {
+  accountSettingsAccount.value = account;
+  Object.assign(
+    accountSettings,
+    defaultAccountSettings(),
+    normalizeTaskOptions(account.daily_settings),
+  );
+  accountSettingsVisible.value = true;
+}
+
+async function saveAccountSettings() {
+  const account = accountSettingsAccount.value;
+  if (!account) return;
+  saving.value = true;
+  try {
+    const settings = { ...accountSettings };
+    const [updated] = await request(
+      `/api/tokens/${encodeURIComponent(account.id)}`,
+      {
+        method: "PATCH",
+        body: { daily_settings: settings },
+      },
+    );
+    Object.assign(account, updated || { daily_settings: settings });
+    const localToken = tokenStore.gameTokens.find(
+      (token) => String(token.roleId) === String(account.roleId),
+    );
+    if (localToken) {
+      localStorage.setItem(
+        `daily-settings:${localToken.id}`,
+        JSON.stringify(settings),
+      );
+    }
+    accountSettingsVisible.value = false;
+    message.success(`已保存 ${account.name} 的账号配置`);
+  } catch (error) {
+    message.error(`保存账号配置失败：${error.message}`);
+  } finally {
+    saving.value = false;
   }
 }
 
@@ -882,6 +1057,30 @@ async function syncAccountsToLocal() {
     }
   }
   message.success(`已同步服务器账号：新增 ${created} 个，修复 ${updated} 个`);
+}
+
+async function syncLocalAccounts() {
+  saving.value = true;
+  try {
+    const result = await syncLocalTokensToServer({
+      tokens: tokenStore.gameTokens,
+      request,
+    });
+    await loadAccounts();
+    if (result.failed) {
+      message.warning(
+        `同步完成：新增 ${result.created} 个，更新 ${result.updated} 个，${result.failed} 个 Token 无法解析`,
+      );
+    } else {
+      message.success(
+        `已同步本机账号：新增 ${result.created} 个，更新 ${result.updated} 个`,
+      );
+    }
+  } catch (error) {
+    message.error(`同步本机账号失败：${error.message}`);
+  } finally {
+    saving.value = false;
+  }
 }
 
 function openTaskDialog(task = null) {
@@ -1204,6 +1403,36 @@ code {
   overflow-y: auto;
 }
 
+.account-settings-dialog {
+  width: min(640px, 92vw);
+}
+
+.account-settings-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.settings-switches {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.settings-switches label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+}
+
+.account-settings-button {
+  margin-left: auto;
+}
+
 .merchant-group h3 {
   margin: 0 0 10px;
   font-size: 17px;
@@ -1285,6 +1514,11 @@ code {
   }
 
   .connection-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .account-settings-grid,
+  .settings-switches {
     grid-template-columns: 1fr;
   }
 }

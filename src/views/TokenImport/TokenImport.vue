@@ -10,6 +10,15 @@
             <ThemeToggle />
           </div>
           <h1>游戏Token管理</h1>
+          <n-button
+            class="server-hangup-shortcut"
+            round
+            :loading="syncingServer"
+            @click="goToServerTasks"
+          >
+            服务器挂机
+            <span class="shortcut-arrow">→</span>
+          </n-button>
         </div>
       </div>
 
@@ -197,14 +206,6 @@
                 </NIcon>
               </template>
               批量功能
-            </n-button>
-            <n-button type="primary" ghost @click="goToServerTasks">
-              <template #icon>
-                <NIcon>
-                  <Settings />
-                </NIcon>
-              </template>
-              服务器挂机
             </n-button>
             <n-button type="warning" @click="goToPushingLevels">
               <template #icon>
@@ -759,7 +760,6 @@ import {
   Menu,
   Refresh,
   Rocket,
-  Settings,
   Star,
   SyncCircle,
   TrashBin,
@@ -768,6 +768,7 @@ import lz4 from "lz4js";
 import { NAlert, NIcon, useDialog, useMessage } from "naive-ui";
 import { computed, h, onMounted, onUnmounted, reactive, ref, watch } from "vue";
 import { useRouter } from "vue-router";
+import { loadServerConnection, serverRequest } from "@/api/serverTasks";
 import useIndexedDB from "@/hooks/useIndexedDB";
 
 import { $emit } from "@/stores/events/index.ts";
@@ -785,6 +786,7 @@ import {
   selectAllTokenIds,
   toggleTokenSelection,
 } from "@/utils/gameSelection";
+import { syncLocalTokensToServer } from "@/utils/serverTokenSync";
 import { scheduleAuthUserRequest, transformToken } from "@/utils/token";
 import {
   generateBinFromCombUser,
@@ -831,6 +833,7 @@ const viewMode = ref(localStorage.getItem("tokenViewMode") || "list");
 const dragIndex = ref(null);
 const multiGameSelectedTokenIds = ref(new Set());
 const isOpeningMultiGame = ref(false);
+const syncingServer = ref(false);
 
 // 备注编辑状态管理
 const editingRemark = ref(null); // 当前正在编辑备注的tokenId
@@ -1907,8 +1910,30 @@ const goToDashboard = () => {
   router.push("/admin/batch-daily-tasks");
 };
 
-const goToServerTasks = () => {
-  router.push("/admin/server-tasks");
+const goToServerTasks = async () => {
+  syncingServer.value = true;
+  try {
+    const connection = loadServerConnection();
+    const result = await syncLocalTokensToServer({
+      tokens: tokenStore.gameTokens,
+      request: (path, options = {}) =>
+        serverRequest(path, { ...connection, ...options }),
+    });
+    if (result.failed) {
+      message.warning(
+        `账号同步完成，但 ${result.failed} 个 Token 无法解析；已同步 ${result.created} 个新增、${result.updated} 个更新`,
+      );
+    } else {
+      message.success(
+        `已同步到服务器挂机：新增 ${result.created} 个，更新 ${result.updated} 个`,
+      );
+    }
+  } catch (error) {
+    message.error(`同步到服务器失败：${error.message}`);
+  } finally {
+    syncingServer.value = false;
+  }
+  await router.push("/admin/server-tasks");
 };
 
 const goToPushingLevels = () => {
@@ -2234,6 +2259,29 @@ onUnmounted(() => {
   margin: 0;
   color: #ffffff;
   text-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+}
+
+.server-hangup-shortcut {
+  min-width: 210px;
+  height: 52px;
+  padding: 0 28px;
+  border: 2px solid rgba(255, 255, 255, 0.55);
+  background: rgba(255, 255, 255, 0.12);
+  color: #ffffff;
+  font-size: 18px;
+  letter-spacing: 0.04em;
+  backdrop-filter: blur(12px);
+}
+
+.server-hangup-shortcut:hover {
+  border-color: #ffffff;
+  background: rgba(255, 255, 255, 0.2);
+  color: #ffffff;
+}
+
+.shortcut-arrow {
+  margin-left: 8px;
+  font-size: 20px;
 }
 
 .header-actions {
