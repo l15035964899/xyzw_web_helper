@@ -15,6 +15,14 @@ test("successful command logs include a readable action description", () => {
     }),
     "执行成功：领取挂机奖励（system_claimhangupreward）",
   );
+  assert.equal(
+    formatTaskLogMessage({
+      taskType: "taskCompleted",
+      status: "success",
+      message: "已完成日常任务",
+    }),
+    "执行成功：定时任务完成（taskCompleted）；已完成日常任务",
+  );
 });
 
 test("known and unknown game errors are expanded for reusable log displays", () => {

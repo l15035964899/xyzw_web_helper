@@ -140,7 +140,12 @@
           <h2>定时任务（{{ tasks.length }}）</h2>
           <p>启用后由 NAS 服务端注册 Cron，不依赖浏览器页面。</p>
         </div>
-        <n-button type="primary" @click="openTaskDialog()">新增任务</n-button>
+        <n-space>
+          <n-button :loading="taskRefreshing" @click="refreshTasks">
+            刷新
+          </n-button>
+          <n-button type="primary" @click="openTaskDialog()">新增任务</n-button>
+        </n-space>
       </div>
 
       <div class="table-wrap">
@@ -157,7 +162,7 @@
             </tr>
           </thead>
           <tbody>
-            <tr v-for="task in tasks" :key="task.id">
+            <tr v-for="task in sortedTasks" :key="task.id">
               <td>
                 {{ task.name }}
                 <n-tag v-if="!task.enabled" size="tiny">停用</n-tag>
@@ -644,6 +649,7 @@ const definitions = ref([]);
 const logs = ref([]);
 const loading = ref(false);
 const logLoading = ref(false);
+const taskRefreshing = ref(false);
 const saving = ref(false);
 const connectionState = ref("idle");
 const errorMessage = ref("");
@@ -716,6 +722,22 @@ const selectedOptionDefinitions = computed(() =>
 
 const selectedDreamCount = computed(
   () => normalizeDreamSelection(taskDraft.options.dreamPurchaseList).length,
+);
+
+const sortedTasks = computed(() =>
+  [...tasks.value].sort((left, right) => {
+    const leftNext = nextRunDate(left);
+    const rightNext = nextRunDate(right);
+    if (leftNext && rightNext) {
+      const difference = leftNext.getTime() - rightNext.getTime();
+      if (difference) return difference;
+    } else if (leftNext) {
+      return -1;
+    } else if (rightNext) {
+      return 1;
+    }
+    return left.name.localeCompare(right.name, "zh-CN");
+  }),
 );
 
 const connectionText = computed(() => {
@@ -792,6 +814,19 @@ async function loadTasks() {
   tasks.value = Array.isArray(data) ? data : [];
 }
 
+async function refreshTasks() {
+  taskRefreshing.value = true;
+  try {
+    await Promise.all([loadTasks(), loadDefinitions()]);
+    clockTick.value = Date.now();
+    message.success("定时任务已刷新");
+  } catch (error) {
+    message.error(`刷新定时任务失败：${error.message}`);
+  } finally {
+    taskRefreshing.value = false;
+  }
+}
+
 async function loadDefinitions() {
   const data = await request("/api/task-definitions");
   definitions.value = Array.isArray(data) ? data : [];
@@ -864,13 +899,17 @@ function cronExpression(task) {
   return task.cron_expr || task.cron_expression || "-";
 }
 
-function nextRunText(task) {
-  if (!task.enabled) return "已停用";
-  const now = new Date(clockTick.value);
-  const next = getNextCronRun(cronExpression(task), {
-    now,
+function nextRunDate(task) {
+  if (!task.enabled) return null;
+  return getNextCronRun(cronExpression(task), {
+    now: new Date(clockTick.value),
     timeZone: "Asia/Shanghai",
   });
+}
+
+function nextRunText(task) {
+  if (!task.enabled) return "已停用";
+  const next = nextRunDate(task);
   return next ? formatCronRun(next) : "无法计算";
 }
 

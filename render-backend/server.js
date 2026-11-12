@@ -301,8 +301,10 @@ async function executeTaskUnlocked(task) {
     taskId: task.id,
   });
 
+  let taskHadErrors = false;
   for (const token of targetTokens) {
     if (runningTokenTasks.has(token.id)) {
+      taskHadErrors = true;
       addLog(
         "WARN",
         "task",
@@ -324,6 +326,7 @@ async function executeTaskUnlocked(task) {
               isRestore: token.isRestore,
             };
     } catch (err) {
+      taskHadErrors = true;
       addLog("ERROR", "task", `Token解析失败: ${token.name}`, {
         error: err.message,
       });
@@ -353,6 +356,7 @@ async function executeTaskUnlocked(task) {
 
           for (const result of cmdResults) {
             const status = result.success ? "success" : "error";
+            if (!result.success) taskHadErrors = true;
             const detail =
               result.message || (result.success ? "OK" : result.error);
             const logMessage = formatTaskLogMessage({
@@ -369,6 +373,7 @@ async function executeTaskUnlocked(task) {
             await logToDb(task.id, token.name, result.cmd, status, logMessage);
           }
         } catch (error) {
+          taskHadErrors = true;
           const logMessage = formatTaskLogMessage({
             taskType: key,
             status: "error",
@@ -382,6 +387,7 @@ async function executeTaskUnlocked(task) {
         }
       }
     } catch (err) {
+      taskHadErrors = true;
       const logMessage = formatTaskLogMessage({
         taskType: taskKeys.join(","),
         status: "error",
@@ -407,7 +413,17 @@ async function executeTaskUnlocked(task) {
   }
 
   await dataStore.markTaskRun(task.id);
-  addLog("INFO", "task", `任务完成: ${task.name}`, { taskId: task.id });
+  const completionMessage = `已完成${task.name}`;
+  addLog(taskHadErrors ? "WARN" : "INFO", "task", completionMessage, {
+    taskId: task.id,
+  });
+  await logToDb(
+    task.id,
+    null,
+    "taskCompleted",
+    taskHadErrors ? "error" : "success",
+    completionMessage,
+  );
 }
 
 async function logToDb(taskId, tokenName, taskType, status, message) {
