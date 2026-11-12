@@ -19,6 +19,7 @@ import {
   runResetBottles,
   runXuanwuBlessing,
 } from "./lib/gameTasks.js";
+import { createLoginProxyMiddleware } from "./lib/loginProxy.js";
 import { formatTaskLogMessage } from "./lib/taskLogDescriptions.js";
 
 dotenv.config();
@@ -40,6 +41,7 @@ function shanghaiDateKey(date = new Date()) {
 }
 
 const app = express();
+app.use(createLoginProxyMiddleware());
 if (process.env.CORS_ORIGIN) {
   app.use(
     cors({
