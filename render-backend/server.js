@@ -345,27 +345,40 @@ async function executeTaskUnlocked(task) {
         });
       }
 
-      for (const { taskDef } of taskDefinitions) {
-        const cmdResults = taskDef.run
-          ? await taskDef.run(client, { token, task })
-          : await client.executeBatch(taskDef.commands, 800);
+      for (const { key, taskDef } of taskDefinitions) {
+        try {
+          const cmdResults = taskDef.run
+            ? await taskDef.run(client, { token, task })
+            : await client.executeBatch(taskDef.commands, 800);
 
-        for (const result of cmdResults) {
-          const status = result.success ? "success" : "error";
-          const detail =
-            result.message || (result.success ? "OK" : result.error);
+          for (const result of cmdResults) {
+            const status = result.success ? "success" : "error";
+            const detail =
+              result.message || (result.success ? "OK" : result.error);
+            const logMessage = formatTaskLogMessage({
+              taskType: result.cmd,
+              status,
+              message: detail,
+            });
+            addLog(
+              result.success ? "INFO" : "ERROR",
+              "task",
+              `[${token.name}] ${logMessage}`,
+              { taskId: task.id },
+            );
+            await logToDb(task.id, token.name, result.cmd, status, logMessage);
+          }
+        } catch (error) {
           const logMessage = formatTaskLogMessage({
-            taskType: result.cmd,
-            status,
-            message: detail,
+            taskType: key,
+            status: "error",
+            message: error.message,
           });
-          addLog(
-            result.success ? "INFO" : "ERROR",
-            "task",
-            `[${token.name}] ${logMessage}`,
-            { taskId: task.id },
-          );
-          await logToDb(task.id, token.name, result.cmd, status, logMessage);
+          addLog("ERROR", "task", `[${token.name}] ${logMessage}`, {
+            taskId: task.id,
+          });
+          await logToDb(task.id, token.name, key, "error", logMessage);
+          if (!client.connected) throw error;
         }
       }
     } catch (err) {

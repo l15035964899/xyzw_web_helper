@@ -110,3 +110,18 @@ test("redeem-code task sends every configured code once", async () => {
   assert.ok(calls.every(({ params }) => params.platformType === "wx"));
   assert.match(results[0].message, /成功 2/);
 });
+
+test("already-completed club sign-in is treated as a successful skip", async () => {
+  const client = {
+    async sendWithPromise(cmd) {
+      assert.equal(cmd, "legion_signin");
+      throw new Error("[2300190] 今天已经签到");
+    },
+  };
+  const results = await runNativeBatchTask("batchclubsign", client, {
+    token: token(),
+    task: { options: {} },
+  });
+  assert.equal(results[0].success, true);
+  assert.match(results[0].message, /已经签到/);
+});

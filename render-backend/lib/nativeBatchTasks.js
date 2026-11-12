@@ -1694,8 +1694,15 @@ export async function runNativeBatchTask(key, client, context) {
     case "batchmengjing":
       return [await runDream(client, token, task)];
     case "batchclubsign":
-      await client.sendWithPromise("legion_signin", {}, 5000);
-      return [{ cmd: key, success: true, message: "俱乐部签到完成" }];
+      try {
+        await client.sendWithPromise("legion_signin", {}, 5000);
+        return [{ cmd: key, success: true, message: "俱乐部签到完成" }];
+      } catch (error) {
+        if (String(error.message).includes("2300190")) {
+          return [{ cmd: key, success: true, message: "今天已经签到" }];
+        }
+        throw error;
+      }
     case "batchCampChallenge":
       return [await runCampChallenge(client, token, task)];
     case "batchCampChallengePet":
@@ -1721,8 +1728,15 @@ export async function runNativeBatchTask(key, client, context) {
     case "store_purchase":
       return [await runBlackMarketPurchase(client, token, task)];
     case "collection_claimfreereward":
-      await client.sendWithPromise("collection_claimfreereward", {}, 5000);
-      return [{ cmd: key, success: true, message: "珍宝阁奖励领取完成" }];
+      try {
+        await client.sendWithPromise("collection_claimfreereward", {}, 5000);
+        return [{ cmd: key, success: true, message: "珍宝阁奖励领取完成" }];
+      } catch (error) {
+        if (/12000116|1000020|700020/.test(String(error.message))) {
+          return [{ cmd: key, success: true, message: "今日奖励已经领取" }];
+        }
+        throw error;
+      }
     case "batchLegacyClaim":
       await client.sendWithPromise("legacy_claimhangup", {}, 5000);
       return [{ cmd: key, success: true, message: "功法残卷领取完成" }];
