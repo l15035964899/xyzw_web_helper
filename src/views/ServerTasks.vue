@@ -351,6 +351,14 @@
                     :max="option.max"
                     clearable
                   />
+                  <n-button
+                    v-else-if="option.type === 'dream-items'"
+                    type="primary"
+                    secondary
+                    @click="openDreamConfig"
+                  >
+                    选择梦境商品（{{ selectedDreamCount }} 项）
+                  </n-button>
                   <n-input
                     v-else
                     v-model:value="taskDraft.options[option.key]"
@@ -413,6 +421,60 @@
         </n-space>
       </n-card>
     </n-modal>
+
+    <n-modal
+      v-model:show="dreamConfigVisible"
+      preset="card"
+      title="梦境商品购买配置"
+      class="dream-config-modal"
+    >
+      <n-space vertical :size="16">
+        <n-alert type="info" show-icon>
+          请勾选需要购买的商品。只会购买列表中存在的商品。
+        </n-alert>
+
+        <n-space>
+          <n-button type="warning" @click="selectGoldDreamItems">
+            一键勾选金币商品
+          </n-button>
+          <n-button @click="selectAllDreamItems">全选所有</n-button>
+          <n-button @click="dreamConfigDraft = []">清空选择</n-button>
+        </n-space>
+
+        <div
+          v-for="(merchant, merchantId) in merchantConfig"
+          :key="merchantId"
+          class="merchant-group"
+        >
+          <h3>{{ merchant.name }}</h3>
+          <n-grid :cols="3" :x-gap="12" :y-gap="10">
+            <n-grid-item
+              v-for="(item, itemIndex) in merchant.items"
+              :key="`${merchantId}-${itemIndex}`"
+            >
+              <n-checkbox
+                :checked="
+                  dreamConfigDraft.includes(`${merchantId}-${itemIndex}`)
+                "
+                @update:checked="
+                  (checked) =>
+                    toggleDreamDraftItem(`${merchantId}-${itemIndex}`, checked)
+                "
+              >
+                {{ item }}
+              </n-checkbox>
+            </n-grid-item>
+          </n-grid>
+        </div>
+
+        <n-space justify="end">
+          <n-button @click="dreamConfigVisible = false">取消</n-button>
+          <n-button type="primary" @click="saveDreamConfig">
+            保存配置
+          </n-button>
+        </n-space>
+      </n-space>
+    </n-modal>
   </main>
 </template>
 
@@ -432,6 +494,7 @@ import {
   serverRequest,
 } from "@/api/serverTasks";
 import { useTokenStore } from "@/stores/tokenStore";
+import { goldItemsConfig, merchantConfig } from "@/utils/dreamConstants";
 import { formatLogMessage, taskTypeLabel } from "@/utils/serverTaskLog";
 import { createBrowserTokenValue } from "@/utils/serverTaskToken";
 
@@ -452,6 +515,8 @@ const autoRefresh = ref(false);
 const backupInput = ref(null);
 const manualAccountVisible = ref(false);
 const taskDialogVisible = ref(false);
+const dreamConfigVisible = ref(false);
+const dreamConfigDraft = ref([]);
 const manualAccount = reactive({ name: "", token: "" });
 let autoRefreshTimer = null;
 
@@ -497,6 +562,10 @@ const selectedOptionDefinitions = computed(() =>
       taskDraft.selected_tasks.includes(definition.key) &&
       definition.options?.length,
   ),
+);
+
+const selectedDreamCount = computed(
+  () => normalizeDreamSelection(taskDraft.options.dreamPurchaseList).length,
 );
 
 const connectionText = computed(() => {
@@ -598,6 +667,21 @@ function normalizeTaskOptions(value) {
   } catch {
     return {};
   }
+}
+
+function normalizeDreamSelection(value) {
+  const list = Array.isArray(value)
+    ? value
+    : String(value || "")
+        .split(/[\s,，;；]+/)
+        .filter(Boolean);
+  return [
+    ...new Set(
+      list
+        .map((item) => String(item).trim())
+        .filter((item) => /^[1-3]-\d+$/.test(item)),
+    ),
+  ];
 }
 
 function selectedTokenIds(task) {
@@ -833,7 +917,9 @@ function applyOptionDefaults() {
     if (!taskDraft.selected_tasks.includes(definition.key)) continue;
     for (const option of definition.options || []) {
       if (taskDraft.options[option.key] === undefined) {
-        taskDraft.options[option.key] = option.default;
+        taskDraft.options[option.key] = Array.isArray(option.default)
+          ? [...option.default]
+          : option.default;
       }
     }
   }
@@ -857,6 +943,46 @@ function selectedTaskOptions() {
     }
   }
   return result;
+}
+
+function openDreamConfig() {
+  dreamConfigDraft.value = normalizeDreamSelection(
+    taskDraft.options.dreamPurchaseList,
+  );
+  dreamConfigVisible.value = true;
+}
+
+function toggleDreamDraftItem(itemKey, checked) {
+  const selected = new Set(dreamConfigDraft.value);
+  if (checked) selected.add(itemKey);
+  else selected.delete(itemKey);
+  dreamConfigDraft.value = [...selected];
+}
+
+function selectGoldDreamItems() {
+  const selected = new Set(dreamConfigDraft.value);
+  for (const [merchantId, indexes] of Object.entries(goldItemsConfig)) {
+    for (const itemIndex of indexes) {
+      selected.add(`${merchantId}-${itemIndex}`);
+    }
+  }
+  dreamConfigDraft.value = [...selected];
+}
+
+function selectAllDreamItems() {
+  const selected = new Set(dreamConfigDraft.value);
+  for (const [merchantId, merchant] of Object.entries(merchantConfig)) {
+    merchant.items.forEach((_, itemIndex) => {
+      selected.add(`${merchantId}-${itemIndex}`);
+    });
+  }
+  dreamConfigDraft.value = [...selected];
+}
+
+function saveDreamConfig() {
+  taskDraft.options.dreamPurchaseList = [...dreamConfigDraft.value];
+  dreamConfigVisible.value = false;
+  message.success("梦境商品购买配置已保存");
 }
 
 async function saveTask() {
@@ -1070,6 +1196,17 @@ code {
 .task-dialog {
   max-height: 90vh;
   overflow-y: auto;
+}
+
+.dream-config-modal {
+  width: min(900px, 92vw);
+  max-height: 90vh;
+  overflow-y: auto;
+}
+
+.merchant-group h3 {
+  margin: 0 0 10px;
+  font-size: 17px;
 }
 
 .field {

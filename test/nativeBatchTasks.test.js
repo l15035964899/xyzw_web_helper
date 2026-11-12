@@ -26,6 +26,9 @@ test("server task picker contains every native scheduled batch task", () => {
         typeof definition.run === "function",
     ),
   );
+  const dreamOption = NATIVE_TASK_CATALOG.batchBuyDreamItems.options[0];
+  assert.equal(dreamOption.type, "dream-items");
+  assert.ok(Array.isArray(dreamOption.default));
 });
 
 test("batch box task applies configured type and count", async () => {

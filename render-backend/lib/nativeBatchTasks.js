@@ -1645,10 +1645,9 @@ export const NATIVE_TASK_CATALOG = {
     options: [
       {
         key: "dreamPurchaseList",
-        label: "梦境商品编号",
-        type: "textarea",
-        default: DEFAULT_DREAM_PURCHASES.join(", "),
-        placeholder: "格式：商人ID-商品索引，例如 1-5, 2-6",
+        label: "梦境商品购买配置",
+        type: "dream-items",
+        default: [...DEFAULT_DREAM_PURCHASES],
       },
     ],
   },
