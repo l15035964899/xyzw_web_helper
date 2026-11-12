@@ -101,16 +101,27 @@
               </td>
               <td class="actions">
                 <n-button
-                  text
+                  size="small"
                   type="primary"
+                  secondary
                   @click="openAccountSettings(account)"
                 >
                   设置
                 </n-button>
-                <n-button text type="primary" @click="toggleAccount(account)">
+                <n-button
+                  size="small"
+                  type="primary"
+                  secondary
+                  @click="toggleAccount(account)"
+                >
                   {{ account.enabled ? "停用" : "启用" }}
                 </n-button>
-                <n-button text type="error" @click="deleteAccount(account)">
+                <n-button
+                  size="small"
+                  type="error"
+                  secondary
+                  @click="deleteAccount(account)"
+                >
                   删除
                 </n-button>
               </td>
@@ -141,6 +152,7 @@
               <th>包含任务</th>
               <th>账号数</th>
               <th>上次运行</th>
+              <th>下次运行（上海时间）</th>
               <th class="actions">操作</th>
             </tr>
           </thead>
@@ -156,18 +168,36 @@
               <td>{{ taskNames(task).join("、") || "-" }}</td>
               <td>{{ selectedTokenIds(task).length }}</td>
               <td>{{ formatDate(task.last_run_at) }}</td>
+              <td>{{ nextRunText(task) }}</td>
               <td class="actions">
-                <n-button text type="primary" @click="runTask(task)">
+                <n-button
+                  size="small"
+                  type="primary"
+                  secondary
+                  @click="runTask(task)"
+                >
                   立刻执行
                 </n-button>
-                <n-button text @click="openTaskDialog(task)">编辑</n-button>
-                <n-button text type="error" @click="deleteTask(task)">
+                <n-button
+                  size="small"
+                  type="primary"
+                  secondary
+                  @click="openTaskDialog(task)"
+                >
+                  编辑
+                </n-button>
+                <n-button
+                  size="small"
+                  type="error"
+                  secondary
+                  @click="deleteTask(task)"
+                >
                   删除
                 </n-button>
               </td>
             </tr>
             <tr v-if="!tasks.length">
-              <td colspan="6" class="empty-cell">还没有服务器定时任务</td>
+              <td colspan="7" class="empty-cell">还没有服务器定时任务</td>
             </tr>
           </tbody>
         </table>
@@ -598,6 +628,7 @@ import {
   serverRequest,
 } from "@/api/serverTasks";
 import { useTokenStore } from "@/stores/tokenStore";
+import { formatCronRun, getNextCronRun } from "@/utils/cronNextRun";
 import { goldItemsConfig, merchantConfig } from "@/utils/dreamConstants";
 import { formatLogMessage, taskTypeLabel } from "@/utils/serverTaskLog";
 import { createBrowserTokenValue } from "@/utils/serverTaskToken";
@@ -626,6 +657,8 @@ const accountSettingsVisible = ref(false);
 const accountSettingsAccount = ref(null);
 const manualAccount = reactive({ name: "", token: "" });
 let autoRefreshTimer = null;
+let nextRunTimer = null;
+const clockTick = ref(Date.now());
 
 const cronPresets = [
   { label: "每天 08:00", expr: "0 8 * * *" },
@@ -829,6 +862,16 @@ function normalizeSelectedTaskKeys(task) {
 
 function cronExpression(task) {
   return task.cron_expr || task.cron_expression || "-";
+}
+
+function nextRunText(task) {
+  if (!task.enabled) return "已停用";
+  const now = new Date(clockTick.value);
+  const next = getNextCronRun(cronExpression(task), {
+    now,
+    timeZone: "Asia/Shanghai",
+  });
+  return next ? formatCronRun(next) : "无法计算";
 }
 
 function taskNames(task) {
@@ -1269,9 +1312,15 @@ watch(autoRefresh, (enabled) => {
   autoRefreshTimer = enabled ? setInterval(loadLogs, 10_000) : null;
 });
 
-onMounted(connect);
+onMounted(() => {
+  connect();
+  nextRunTimer = setInterval(() => {
+    clockTick.value = Date.now();
+  }, 30_000);
+});
 onBeforeUnmount(() => {
   if (autoRefreshTimer) clearInterval(autoRefreshTimer);
+  if (nextRunTimer) clearInterval(nextRunTimer);
 });
 </script>
 
