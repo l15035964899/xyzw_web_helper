@@ -22,6 +22,7 @@ import {
 import { createLoginProxyMiddleware } from "./lib/loginProxy.js";
 import { createNativeTaskDefinitions } from "./lib/nativeBatchTasks.js";
 import { formatTaskLogMessage } from "./lib/taskLogDescriptions.js";
+import { TokenLockQueue } from "./lib/tokenLockQueue.js";
 
 dotenv.config();
 process.env.TZ = process.env.TZ || "Asia/Shanghai";
@@ -221,7 +222,7 @@ async function loadTokens() {
 
 // ==================== 任务执行引擎 ====================
 const runningTasks = new Set();
-const runningTokenTasks = new Map();
+const tokenLockQueue = new TokenLockQueue();
 
 async function executeTask(task) {
   if (!task?.id) throw new Error("任务缺少 id");
@@ -302,128 +303,147 @@ async function executeTaskUnlocked(task) {
   });
 
   let taskHadErrors = false;
-  for (const token of targetTokens) {
-    if (runningTokenTasks.has(token.id)) {
-      taskHadErrors = true;
-      addLog(
-        "WARN",
-        "task",
-        `[${token.name}] 该账号正在执行其他任务，本次跳过`,
-        { taskId: task.id },
-      );
-      continue;
-    }
-    let tokenData;
-    try {
-      tokenData =
-        typeof token.token === "string" && token.token.startsWith("{")
-          ? JSON.parse(token.token)
-          : {
-              roleToken: token.token,
-              roleId: token.roleId,
-              sessId: token.sessId,
-              connId: token.connId,
-              isRestore: token.isRestore,
-            };
-    } catch (err) {
-      taskHadErrors = true;
-      addLog("ERROR", "task", `Token解析失败: ${token.name}`, {
-        error: err.message,
-      });
-      continue;
-    }
-
-    tokenData.name = token.name;
-    runningTokenTasks.set(token.id, task.id);
-    const client = new GameClient(tokenData, token.ws_url);
-
-    try {
-      await client.connect(15000);
-      try {
-        await client.sendWithPromise("role_getroleinfo", {}, 8000);
-        await sleep(500);
-      } catch (e) {
-        addLog("WARN", "task", `获取角色信息失败 (${token.name})`, {
-          error: e.message,
-        });
-      }
-
-      for (const { key, taskDef } of taskDefinitions) {
-        try {
-          const cmdResults = taskDef.run
-            ? await taskDef.run(client, { token, task })
-            : await client.executeBatch(taskDef.commands, 800);
-
-          for (const result of cmdResults) {
-            const status = result.success ? "success" : "error";
-            if (!result.success) taskHadErrors = true;
-            const detail =
-              result.message || (result.success ? "OK" : result.error);
-            const logMessage = formatTaskLogMessage({
-              taskType: result.cmd,
-              status,
-              message: detail,
-            });
-            addLog(
-              result.success ? "INFO" : "ERROR",
-              "task",
-              `[${token.name}] ${logMessage}`,
-              { taskId: task.id },
-            );
-            await logToDb(task.id, token.name, result.cmd, status, logMessage);
-          }
-        } catch (error) {
-          taskHadErrors = true;
-          const logMessage = formatTaskLogMessage({
-            taskType: key,
-            status: "error",
-            message: error.message,
-          });
-          addLog("ERROR", "task", `[${token.name}] ${logMessage}`, {
-            taskId: task.id,
-          });
-          await logToDb(task.id, token.name, key, "error", logMessage);
-          if (!client.connected) throw error;
-        }
-      }
-    } catch (err) {
-      taskHadErrors = true;
-      const logMessage = formatTaskLogMessage({
-        taskType: taskKeys.join(","),
-        status: "error",
-        message: err.message,
-      });
-      addLog("ERROR", "task", `[${token.name}] ${logMessage}`, {
-        taskId: task.id,
-      });
-      await logToDb(
-        task.id,
-        token.name,
-        taskKeys.join(","),
-        "error",
-        logMessage,
-      );
-    } finally {
-      client.disconnect();
-      if (runningTokenTasks.get(token.id) === task.id) {
-        runningTokenTasks.delete(token.id);
-      }
-    }
-    await sleep(2000);
+  let queued = false;
+  const taskLease = await tokenLockQueue.acquireAll(
+    targetTokens.map((token) => token.id),
+    task.id,
+    {
+      onWait: (holderTaskId) => {
+        if (queued) return;
+        queued = true;
+        addLog(
+          "INFO",
+          "task",
+          `任务“${task.name}”已进入队列，等待前序任务结束`,
+          { taskId: task.id, holderTaskId },
+        );
+      },
+    },
+  );
+  if (queued) {
+    addLog("INFO", "task", `任务“${task.name}”排队结束，开始执行`, {
+      taskId: task.id,
+    });
   }
 
-  await dataStore.markTaskRun(task.id);
-  const completionMessage = `已完成${task.name}`;
-  addLog(taskHadErrors ? "WARN" : "INFO", "task", completionMessage, {
-    taskId: task.id,
-  });
-  await logToDb(
-    task.id,
-    null,
-    "taskCompleted",
-    taskHadErrors ? "error" : "success",
-    completionMessage,
-  );
+  try {
+    for (const token of targetTokens) {
+      let tokenData;
+      try {
+        tokenData =
+          typeof token.token === "string" && token.token.startsWith("{")
+            ? JSON.parse(token.token)
+            : {
+                roleToken: token.token,
+                roleId: token.roleId,
+                sessId: token.sessId,
+                connId: token.connId,
+                isRestore: token.isRestore,
+              };
+      } catch (err) {
+        taskHadErrors = true;
+        addLog("ERROR", "task", `Token解析失败: ${token.name}`, {
+          error: err.message,
+        });
+        continue;
+      }
+
+      tokenData.name = token.name;
+      const client = new GameClient(tokenData, token.ws_url);
+
+      try {
+        await client.connect(15000);
+        try {
+          await client.sendWithPromise("role_getroleinfo", {}, 8000);
+          await sleep(500);
+        } catch (e) {
+          addLog("WARN", "task", `获取角色信息失败 (${token.name})`, {
+            error: e.message,
+          });
+        }
+
+        for (const { key, taskDef } of taskDefinitions) {
+          try {
+            const cmdResults = taskDef.run
+              ? await taskDef.run(client, { token, task })
+              : await client.executeBatch(taskDef.commands, 800);
+
+            for (const result of cmdResults) {
+              const status = result.success ? "success" : "error";
+              if (!result.success) taskHadErrors = true;
+              const detail =
+                result.message || (result.success ? "OK" : result.error);
+              const logMessage = formatTaskLogMessage({
+                taskType: result.cmd,
+                status,
+                message: detail,
+              });
+              addLog(
+                result.success ? "INFO" : "ERROR",
+                "task",
+                `[${token.name}] ${logMessage}`,
+                { taskId: task.id },
+              );
+              await logToDb(
+                task.id,
+                token.name,
+                result.cmd,
+                status,
+                logMessage,
+              );
+            }
+          } catch (error) {
+            taskHadErrors = true;
+            const logMessage = formatTaskLogMessage({
+              taskType: key,
+              status: "error",
+              message: error.message,
+            });
+            addLog("ERROR", "task", `[${token.name}] ${logMessage}`, {
+              taskId: task.id,
+            });
+            await logToDb(task.id, token.name, key, "error", logMessage);
+            if (!client.connected) throw error;
+          }
+        }
+      } catch (err) {
+        taskHadErrors = true;
+        const logMessage = formatTaskLogMessage({
+          taskType: taskKeys.join(","),
+          status: "error",
+          message: err.message,
+        });
+        addLog("ERROR", "task", `[${token.name}] ${logMessage}`, {
+          taskId: task.id,
+        });
+        await logToDb(
+          task.id,
+          token.name,
+          taskKeys.join(","),
+          "error",
+          logMessage,
+        );
+      } finally {
+        client.disconnect();
+      }
+      await sleep(2000);
+    }
+
+    await dataStore.markTaskRun(task.id);
+    const completionMessage = `已完成${task.name}`;
+    addLog(taskHadErrors ? "WARN" : "INFO", "task", completionMessage, {
+      taskId: task.id,
+    });
+    await logToDb(
+      task.id,
+      null,
+      "taskCompleted",
+      taskHadErrors ? "error" : "success",
+      completionMessage,
+    );
+  } finally {
+    taskLease.release();
+  }
 }
 
 async function logToDb(taskId, tokenName, taskType, status, message) {
