@@ -275,21 +275,106 @@
           </div>
 
           <div class="field">
-            <label>包含任务</label>
-            <div class="check-grid task-types">
-              <label
-                v-for="definition in definitions"
-                :key="definition.key"
-                class="check-item"
-              >
-                <input
-                  type="checkbox"
-                  :checked="taskDraft.selected_tasks.includes(definition.key)"
-                  @change="toggleDraftValue('selected_tasks', definition.key)"
-                />
-                <span>{{ definition.name }}</span>
-              </label>
+            <div class="field-title-row">
+              <label>包含任务</label>
+              <n-space size="small">
+                <n-button size="small" @click="selectAllTasks">全选</n-button>
+                <n-button size="small" @click="taskDraft.selected_tasks = []">
+                  全不选
+                </n-button>
+              </n-space>
             </div>
+            <n-tabs
+              type="line"
+              animated
+              size="small"
+              default-value="daily"
+              pane-style="padding-top: 12px;"
+            >
+              <n-tab-pane
+                v-for="group in taskGroups"
+                :key="group.key"
+                :name="group.key"
+                :tab="group.label"
+              >
+                <div class="check-grid task-types">
+                  <label
+                    v-for="definition in groupedDefinitions[group.key] || []"
+                    :key="definition.key"
+                    class="check-item"
+                    :title="definition.description"
+                  >
+                    <input
+                      type="checkbox"
+                      :checked="
+                        taskDraft.selected_tasks.includes(definition.key)
+                      "
+                      @change="
+                        toggleDraftValue('selected_tasks', definition.key)
+                      "
+                    />
+                    <span>{{ definition.name }}</span>
+                  </label>
+                </div>
+              </n-tab-pane>
+            </n-tabs>
+          </div>
+
+          <div v-if="selectedOptionDefinitions.length" class="field">
+            <label>任务参数</label>
+            <n-card
+              v-for="definition in selectedOptionDefinitions"
+              :key="definition.key"
+              size="small"
+              :title="definition.name"
+              class="task-option-card"
+            >
+              <div class="option-grid">
+                <div
+                  v-for="option in definition.options"
+                  :key="`${definition.key}:${option.key}`"
+                  class="option-field"
+                >
+                  <label>
+                    {{ option.label }}
+                    <span v-if="option.required" class="required">*</span>
+                  </label>
+                  <n-select
+                    v-if="option.type === 'select'"
+                    v-model:value="taskDraft.options[option.key]"
+                    :options="option.options || []"
+                  />
+                  <n-input-number
+                    v-else-if="option.type === 'number'"
+                    v-model:value="taskDraft.options[option.key]"
+                    :min="option.min"
+                    :max="option.max"
+                    clearable
+                  />
+                  <n-input
+                    v-else
+                    v-model:value="taskDraft.options[option.key]"
+                    :placeholder="option.placeholder || ''"
+                    :rows="option.type === 'textarea' ? 3 : undefined"
+                    :autosize="
+                      option.type === 'textarea'
+                        ? { minRows: 3, maxRows: 8 }
+                        : undefined
+                    "
+                    :show-password-on="
+                      option.type === 'password' ? 'click' : undefined
+                    "
+                    :type="
+                      option.type === 'textarea'
+                        ? 'textarea'
+                        : option.type === 'password'
+                          ? 'password'
+                          : 'text'
+                    "
+                  />
+                </div>
+              </div>
+            </n-card>
           </div>
 
           <div class="field">
@@ -378,6 +463,42 @@ const cronPresets = [
   { label: "每小时", expr: "0 * * * *" },
 ];
 
+const taskGroups = [
+  { key: "daily", label: "日常" },
+  { key: "dungeon", label: "副本" },
+  { key: "baoku", label: "宝库" },
+  { key: "weirdTower", label: "怪异塔" },
+  { key: "resource", label: "资源" },
+  { key: "legacy", label: "功法" },
+  { key: "monthly", label: "月度" },
+];
+
+const legacyTaskAliases = {
+  dailyBundle: "startBatch",
+  claimHangup: "claimHangUpRewards",
+  arenaFight: "batcharenafight",
+  legionSignIn: "batchclubsign",
+};
+
+const groupedDefinitions = computed(() =>
+  Object.fromEntries(
+    taskGroups.map((group) => [
+      group.key,
+      definitions.value.filter(
+        (definition) => (definition.group || "other") === group.key,
+      ),
+    ]),
+  ),
+);
+
+const selectedOptionDefinitions = computed(() =>
+  definitions.value.filter(
+    (definition) =>
+      taskDraft.selected_tasks.includes(definition.key) &&
+      definition.options?.length,
+  ),
+);
+
 const connectionText = computed(() => {
   if (loading.value) return "正在连接";
   if (connectionState.value === "ok") return "NAS 已连接";
@@ -400,6 +521,7 @@ function emptyTask() {
     cron_expr: "0 8 * * *",
     selected_tasks: [],
     selected_tokens: [],
+    options: {},
     enabled: true,
   };
 }
@@ -463,8 +585,29 @@ function normalizeArray(value) {
   }
 }
 
+function normalizeTaskOptions(value) {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return { ...value };
+  }
+  if (typeof value !== "string" || !value.trim()) return {};
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed
+      : {};
+  } catch {
+    return {};
+  }
+}
+
 function selectedTokenIds(task) {
   return normalizeArray(task.selected_tokens || task.token_ids);
+}
+
+function normalizeSelectedTaskKeys(task) {
+  return normalizeArray(task.selected_tasks || task.task_type).map(
+    (key) => legacyTaskAliases[key] || key,
+  );
 }
 
 function cronExpression(task) {
@@ -664,12 +807,14 @@ function openTaskDialog(task = null) {
       ? {
           ...task,
           cron_expr: cronExpression(task),
-          selected_tasks: normalizeArray(task.selected_tasks || task.task_type),
+          selected_tasks: normalizeSelectedTaskKeys(task),
           selected_tokens: selectedTokenIds(task),
+          options: normalizeTaskOptions(task.options || task.task_options),
           enabled: Boolean(task.enabled),
         }
       : emptyTask(),
   );
+  applyOptionDefaults();
   taskDialogVisible.value = true;
 }
 
@@ -677,7 +822,41 @@ function toggleDraftValue(key, value) {
   const list = taskDraft[key];
   const index = list.indexOf(value);
   if (index >= 0) list.splice(index, 1);
-  else list.push(value);
+  else {
+    list.push(value);
+    if (key === "selected_tasks") applyOptionDefaults();
+  }
+}
+
+function applyOptionDefaults() {
+  for (const definition of definitions.value) {
+    if (!taskDraft.selected_tasks.includes(definition.key)) continue;
+    for (const option of definition.options || []) {
+      if (taskDraft.options[option.key] === undefined) {
+        taskDraft.options[option.key] = option.default;
+      }
+    }
+  }
+}
+
+function selectAllTasks() {
+  taskDraft.selected_tasks = definitions.value.map(
+    (definition) => definition.key,
+  );
+  applyOptionDefaults();
+}
+
+function selectedTaskOptions() {
+  const result = {};
+  for (const definition of selectedOptionDefinitions.value) {
+    for (const option of definition.options || []) {
+      const value = taskDraft.options[option.key];
+      if (value !== undefined && value !== null && value !== "") {
+        result[option.key] = value;
+      }
+    }
+  }
+  return result;
 }
 
 async function saveTask() {
@@ -687,6 +866,17 @@ async function saveTask() {
     return message.warning("至少选择一个任务");
   if (!taskDraft.selected_tokens.length)
     return message.warning("至少选择一个账号");
+  for (const definition of selectedOptionDefinitions.value) {
+    for (const option of definition.options || []) {
+      const value = taskDraft.options[option.key];
+      if (
+        option.required &&
+        (value === undefined || value === null || value === "")
+      ) {
+        return message.warning(`请填写“${definition.name}”的${option.label}`);
+      }
+    }
+  }
 
   saving.value = true;
   try {
@@ -695,6 +885,7 @@ async function saveTask() {
       cron_expr: taskDraft.cron_expr.trim(),
       selected_tasks: [...taskDraft.selected_tasks],
       selected_tokens: [...taskDraft.selected_tokens],
+      options: selectedTaskOptions(),
       enabled: Boolean(taskDraft.enabled),
     };
     await request(
@@ -887,6 +1078,13 @@ code {
   gap: 8px;
 }
 
+.field-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
 .presets {
   display: flex;
   flex-wrap: wrap;
@@ -908,6 +1106,30 @@ code {
   padding: 8px;
   border: 1px solid var(--border-light);
   border-radius: 8px;
+}
+
+.task-types {
+  max-height: 260px;
+}
+
+.task-option-card {
+  border: 1px solid var(--border-light);
+}
+
+.option-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+}
+
+.option-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.required {
+  color: var(--error-color);
 }
 
 .switch-row {

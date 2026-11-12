@@ -19,6 +19,21 @@ function normalizeEnabled(value, fallback = true) {
   return value === true || value === 1 || value === "1" || value === "true";
 }
 
+function normalizeOptions(value) {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return value;
+  }
+  if (typeof value !== "string" || !value.trim()) return {};
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed
+      : {};
+  } catch {
+    return {};
+  }
+}
+
 function normalizeToken(input = {}) {
   const now = new Date().toISOString();
   const token =
@@ -57,6 +72,7 @@ function normalizeTask(input = {}) {
     selected_tokens: normalizeArray(
       input.selected_tokens || input.token_ids || input.connectedTokens,
     ),
+    options: normalizeOptions(input.options || input.task_options),
     enabled: normalizeEnabled(input.enabled),
     last_run_at: input.last_run_at || null,
     created_at: input.created_at || now,

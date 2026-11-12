@@ -20,6 +20,7 @@ import {
   runXuanwuBlessing,
 } from "./lib/gameTasks.js";
 import { createLoginProxyMiddleware } from "./lib/loginProxy.js";
+import { createNativeTaskDefinitions } from "./lib/nativeBatchTasks.js";
 import { formatTaskLogMessage } from "./lib/taskLogDescriptions.js";
 
 dotenv.config();
@@ -57,7 +58,7 @@ app.use(express.json());
 const dataStore = createDataStore(process.env);
 
 // ==================== 任务定义 ====================
-const TASK_DEFINITIONS = {
+const LEGACY_TASK_DEFINITIONS = {
   signIn: {
     name: "签到",
     commands: [{ cmd: "system_signinreward", params: {} }],
@@ -177,6 +178,16 @@ const TASK_DEFINITIONS = {
   },
 };
 
+for (const definition of Object.values(LEGACY_TASK_DEFINITIONS)) {
+  definition.hiddenFromPicker = true;
+  definition.group = "legacy";
+}
+
+const TASK_DEFINITIONS = {
+  ...LEGACY_TASK_DEFINITIONS,
+  ...createNativeTaskDefinitions(),
+};
+
 // ==================== 日志存储 ====================
 const LOG_MAX = 500;
 const logs = [];
@@ -210,6 +221,7 @@ async function loadTokens() {
 
 // ==================== 任务执行引擎 ====================
 const runningTasks = new Set();
+const runningTokenTasks = new Map();
 
 async function executeTask(task) {
   if (!task?.id) throw new Error("任务缺少 id");
@@ -290,6 +302,15 @@ async function executeTaskUnlocked(task) {
   });
 
   for (const token of targetTokens) {
+    if (runningTokenTasks.has(token.id)) {
+      addLog(
+        "WARN",
+        "task",
+        `[${token.name}] 该账号正在执行其他任务，本次跳过`,
+        { taskId: task.id },
+      );
+      continue;
+    }
     let tokenData;
     try {
       tokenData =
@@ -310,6 +331,7 @@ async function executeTaskUnlocked(task) {
     }
 
     tokenData.name = token.name;
+    runningTokenTasks.set(token.id, task.id);
     const client = new GameClient(tokenData, token.ws_url);
 
     try {
@@ -364,6 +386,9 @@ async function executeTaskUnlocked(task) {
       );
     } finally {
       client.disconnect();
+      if (runningTokenTasks.get(token.id) === task.id) {
+        runningTokenTasks.delete(token.id);
+      }
     }
     await sleep(2000);
   }
@@ -674,12 +699,17 @@ app.get("/api/logs/db", async (req, res) => {
 });
 
 app.get("/api/task-definitions", (req, res) => {
-  const list = Object.entries(TASK_DEFINITIONS).map(([key, val]) => ({
-    key,
-    name: val.name,
-    commands: val.commands?.map((command) => command.cmd) || [],
-    mode: val.run ? "custom" : "commands",
-  }));
+  const list = Object.entries(TASK_DEFINITIONS)
+    .filter(([, definition]) => !definition.hiddenFromPicker)
+    .map(([key, definition]) => ({
+      key,
+      name: definition.name,
+      group: definition.group || "other",
+      description: definition.description || "",
+      commands: definition.commands?.map((command) => command.cmd) || [],
+      options: definition.options || [],
+      mode: definition.run ? "custom" : "commands",
+    }));
   res.json(list);
 });
 

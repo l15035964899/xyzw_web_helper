@@ -198,6 +198,14 @@
               </template>
               批量功能
             </n-button>
+            <n-button type="primary" ghost @click="goToServerTasks">
+              <template #icon>
+                <NIcon>
+                  <Settings />
+                </NIcon>
+              </template>
+              服务器挂机
+            </n-button>
             <n-button type="warning" @click="goToPushingLevels">
               <template #icon>
                 <NIcon>
@@ -751,6 +759,7 @@ import {
   Menu,
   Refresh,
   Rocket,
+  Settings,
   Star,
   SyncCircle,
   TrashBin,
@@ -1896,6 +1905,10 @@ const formatTime = (timestamp) => {
 
 const goToDashboard = () => {
   router.push("/admin/batch-daily-tasks");
+};
+
+const goToServerTasks = () => {
+  router.push("/admin/server-tasks");
 };
 
 const goToPushingLevels = () => {

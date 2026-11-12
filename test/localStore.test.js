@@ -29,9 +29,14 @@ test("local store persists tokens, tasks and task logs", async (t) => {
     cron_expr: "0 8 * * *",
     selected_tasks: ["dailyBundle"],
     selected_tokens: [token.id],
+    options: { boxType: 2003, boxCount: 100 },
     enabled: true,
   });
   assert.equal((await store.listTasks({ enabledOnly: true })).length, 1);
+  assert.deepEqual((await store.getTask(task.id)).options, {
+    boxType: 2003,
+    boxCount: 100,
+  });
 
   await store.markTaskRun(task.id, "2026-11-11T00:00:00.000Z");
   assert.equal(
