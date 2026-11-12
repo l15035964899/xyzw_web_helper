@@ -80,13 +80,14 @@ export async function syncLocalTokensToServer({ tokens = [], request }) {
   for (const token of tokens) {
     try {
       const parsed = decodeLocalTokenPayload(token.token);
+      const roleId = token.roleId ?? parsed.roleId ?? null;
       const existing =
-        (parsed.roleId != null ? byRoleId.get(String(parsed.roleId)) : null) ||
+        (roleId != null ? byRoleId.get(String(roleId)) : null) ||
         serverTokens.find((item) => item.id === token.id);
       const body = {
         name: token.name,
         token: createBrowserTokenValue(parsed),
-        roleId: parsed.roleId,
+        roleId,
         sessId: parsed.sessId,
         connId: parsed.connId,
         isRestore: parsed.isRestore,
@@ -108,8 +109,8 @@ export async function syncLocalTokensToServer({ tokens = [], request }) {
           body: { ...body, id: token.id },
         });
         serverTokens.push(createdToken);
-        if (parsed.roleId != null) {
-          byRoleId.set(String(parsed.roleId), createdToken);
+        if (roleId != null) {
+          byRoleId.set(String(roleId), createdToken);
         }
         created += 1;
       }

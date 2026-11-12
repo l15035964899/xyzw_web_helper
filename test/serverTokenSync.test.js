@@ -54,12 +54,14 @@ test("sync updates existing role and adds a new account with local settings", as
         {
           id: "local-old",
           name: "已有账号",
-          token: JSON.stringify({ roleToken: "old", roleId: 101 }),
+          roleId: 101,
+          token: JSON.stringify({ roleToken: "old", roleId: 999 }),
         },
         {
           id: "local-new",
           name: "新账号",
-          token: JSON.stringify({ roleToken: "new", roleId: 202 }),
+          roleId: 202,
+          token: JSON.stringify({ roleToken: "new", roleId: 888 }),
         },
       ],
       request,
@@ -68,6 +70,7 @@ test("sync updates existing role and adds a new account with local settings", as
     assert.ok(calls.some(({ path }) => path === "/api/tokens/server-old"));
     const createCall = calls.find(({ options }) => options.method === "POST");
     assert.equal(createCall.options.body.id, "local-new");
+    assert.equal(createCall.options.body.roleId, 202);
     assert.deepEqual(createCall.options.body.daily_settings, {
       arenaFormation: 4,
     });
