@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
+import { normalizeBatchSettings } from "./batchSettings.js";
 
 function normalizeArray(value) {
   if (Array.isArray(value)) return value;
@@ -92,6 +93,7 @@ export function createLocalStore({ dataDir }) {
   const root = path.resolve(dataDir || "/data");
   const tokensFile = path.join(root, "tokens.json");
   const tasksFile = path.join(root, "cron-tasks.json");
+  const batchSettingsFile = path.join(root, "batch-settings.json");
   const logsFile = path.join(root, "task-logs.jsonl");
   let writeQueue = Promise.resolve();
 
@@ -224,24 +226,40 @@ export function createLocalStore({ dataDir }) {
   }
 
   async function appendTaskLog(input) {
+    const [entry] = await appendTaskLogs([input]);
+    return entry;
+  }
+
+  async function appendTaskLogs(inputs = []) {
     return mutate(async () => {
-      const entry = {
-        id: randomUUID(),
+      const entries = inputs.map((input) => ({
+        id: input.id || randomUUID(),
+        run_id: input.run_id || null,
         task_id: input.task_id || null,
-        token_name: input.token_name || null,
+        token_id: input.token_id || input.account_id || null,
+        token_name: input.token_name || input.account_name || null,
         task_type: input.task_type || null,
-        status: input.status || "info",
+        status: input.status || input.level || "info",
+        level: input.level || input.status || "info",
         message: input.message || null,
+        source: input.source || "server",
         created_at: input.created_at || new Date().toISOString(),
-      };
-      await fs.appendFile(logsFile, `${JSON.stringify(entry)}\n`, {
-        mode: 0o600,
-      });
-      return entry;
+      }));
+      if (entries.length > 0) {
+        await fs.appendFile(
+          logsFile,
+          `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`,
+          { mode: 0o600 },
+        );
+      }
+      return entries;
     });
   }
 
-  async function listTaskLogs(limit = 100, { status = null } = {}) {
+  async function listTaskLogs(
+    limit = 100,
+    { status = null, taskId = null, runId = null } = {},
+  ) {
     try {
       const content = await fs.readFile(logsFile, "utf8");
       const parsed = [];
@@ -253,9 +271,12 @@ export function createLocalStore({ dataDir }) {
           // Ignore a torn final line after an interrupted write.
         }
       }
-      const filtered = status
-        ? parsed.filter((entry) => entry.status === status)
-        : parsed;
+      const filtered = parsed.filter(
+        (entry) =>
+          (!status || entry.status === status) &&
+          (!taskId || entry.task_id === taskId) &&
+          (!runId || entry.run_id === runId),
+      );
       return filtered.slice(-Math.max(1, limit)).reverse();
     } catch (error) {
       if (error?.code === "ENOENT") return [];
@@ -282,6 +303,31 @@ export function createLocalStore({ dataDir }) {
     });
   }
 
+  async function getBatchSettings() {
+    return normalizeBatchSettings(await readJson(batchSettingsFile, {}));
+  }
+
+  async function hasBatchSettings() {
+    try {
+      await fs.access(batchSettingsFile);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async function updateBatchSettings(patch = {}) {
+    return mutate(async () => {
+      const current = await getBatchSettings();
+      const next = normalizeBatchSettings({
+        ...current,
+        ...(patch && typeof patch === "object" ? patch : {}),
+      });
+      await writeJson(batchSettingsFile, next);
+      return next;
+    });
+  }
+
   return {
     kind: "local",
     root,
@@ -297,7 +343,11 @@ export function createLocalStore({ dataDir }) {
     updateTask,
     markTaskRun,
     deleteTask,
+    getBatchSettings,
+    hasBatchSettings,
+    updateBatchSettings,
     appendTaskLog,
+    appendTaskLogs,
     listTaskLogs,
     deleteTaskLogsBefore,
   };

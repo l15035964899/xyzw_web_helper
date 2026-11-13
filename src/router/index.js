@@ -2,6 +2,7 @@ import { createRouter, createWebHistory } from "vue-router";
 import * as autoRoutes from "vue-router/auto-routes";
 import { useTokenStore } from "@/stores/tokenStore";
 import { isNowInLegionWarTime } from "@/utils/clubBattleUtils";
+import { ensureNasTokensHydrated } from "@/utils/nasTokenBootstrap";
 
 const generatedRoutes = autoRoutes.routes ?? [];
 
@@ -133,12 +134,7 @@ const my_routes = [
       },
       {
         path: "server-tasks",
-        name: "ServerTasks",
-        component: () => import("@/views/ServerTasks.vue"),
-        meta: {
-          title: "服务器挂机",
-          requiresToken: false,
-        },
+        redirect: "/admin/batch-daily-tasks",
       },
       {
         path: "PushingLevels",
@@ -203,8 +199,14 @@ const router = createRouter({
 autoRoutes.handleHotUpdate?.(router);
 
 // 导航守卫
-router.beforeEach((to, from, next) => {
+router.beforeEach(async (to, from, next) => {
   const tokenStore = useTokenStore();
+
+  try {
+    await ensureNasTokensHydrated(tokenStore);
+  } catch (error) {
+    console.warn("从 NAS 恢复 Token 失败，将使用本机缓存:", error.message);
+  }
 
   // 设置页面标题
   document.title = to.meta.title
@@ -218,10 +220,8 @@ router.beforeEach((to, from, next) => {
   if (to.meta.requiresToken && !tokenStore.hasTokens) {
     next("/tokens");
   } else if (to.path === "/") {
-    // The self-hosted NAS entry must stay inside the admin layout so the
-    // server-task navigation is visible even when this browser has no token.
     if (!tokenStore.hasTokens) {
-      next("/admin/server-tasks");
+      next("/tokens");
     } else if (tokenStore.selectedToken) {
       next("/admin/dashboard");
     } else {

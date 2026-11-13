@@ -1,5 +1,6 @@
 import process from "node:process";
 import { createClient } from "@supabase/supabase-js";
+import { normalizeBatchSettings } from "./batchSettings.js";
 import { createLocalStore } from "./localStore.js";
 
 function throwIfError(error) {
@@ -11,6 +12,8 @@ function createSupabaseStore(url, key) {
     throw new Error("SUPABASE_URL and SUPABASE_KEY are required");
   }
   const supabase = createClient(url, key);
+  let batchSettings = normalizeBatchSettings();
+  let batchSettingsInitialized = false;
 
   async function listTokens({ enabledOnly = false } = {}) {
     let query = supabase.from("tokens").select("*").order("created_at");
@@ -106,13 +109,28 @@ function createSupabaseStore(url, key) {
     return data;
   }
 
-  async function listTaskLogs(limit = 100, { status = null } = {}) {
+  async function appendTaskLogs(inputs = []) {
+    if (inputs.length === 0) return [];
+    const { data, error } = await supabase
+      .from("task_logs")
+      .insert(inputs)
+      .select();
+    throwIfError(error);
+    return data || [];
+  }
+
+  async function listTaskLogs(
+    limit = 100,
+    { status = null, taskId = null, runId = null } = {},
+  ) {
     let query = supabase
       .from("task_logs")
       .select("*")
       .order("created_at", { ascending: false })
       .limit(limit);
     if (status) query = query.eq("status", status);
+    if (taskId) query = query.eq("task_id", taskId);
+    if (runId) query = query.eq("run_id", runId);
     const { data, error } = await query;
     throwIfError(error);
     return data || [];
@@ -125,6 +143,23 @@ function createSupabaseStore(url, key) {
       .lt("created_at", new Date(cutoff).toISOString());
     throwIfError(error);
     return 0;
+  }
+
+  async function getBatchSettings() {
+    return normalizeBatchSettings(batchSettings);
+  }
+
+  async function hasBatchSettings() {
+    return batchSettingsInitialized;
+  }
+
+  async function updateBatchSettings(patch = {}) {
+    batchSettings = normalizeBatchSettings({
+      ...batchSettings,
+      ...(patch && typeof patch === "object" ? patch : {}),
+    });
+    batchSettingsInitialized = true;
+    return batchSettings;
   }
 
   return {
@@ -140,7 +175,11 @@ function createSupabaseStore(url, key) {
     updateTask,
     markTaskRun,
     deleteTask,
+    getBatchSettings,
+    hasBatchSettings,
+    updateBatchSettings,
     appendTaskLog,
+    appendTaskLogs,
     listTaskLogs,
     deleteTaskLogsBefore,
   };

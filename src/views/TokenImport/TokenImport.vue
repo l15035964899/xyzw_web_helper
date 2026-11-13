@@ -13,10 +13,10 @@
           <n-button
             class="server-hangup-shortcut"
             round
-            :loading="syncingServer"
-            @click="goToServerTasks"
+            :loading="syncingNasAccounts"
+            @click="goToBatchDaily"
           >
-            服务器挂机
+            批量日常
             <span class="shortcut-arrow">→</span>
           </n-button>
         </div>
@@ -833,7 +833,7 @@ const viewMode = ref(localStorage.getItem("tokenViewMode") || "list");
 const dragIndex = ref(null);
 const multiGameSelectedTokenIds = ref(new Set());
 const isOpeningMultiGame = ref(false);
-const syncingServer = ref(false);
+const syncingNasAccounts = ref(false);
 
 // 备注编辑状态管理
 const editingRemark = ref(null); // 当前正在编辑备注的tokenId
@@ -1910,8 +1910,8 @@ const goToDashboard = () => {
   router.push("/admin/batch-daily-tasks");
 };
 
-const goToServerTasks = async () => {
-  syncingServer.value = true;
+const goToBatchDaily = async () => {
+  syncingNasAccounts.value = true;
   try {
     const connection = loadServerConnection();
     const result = await syncLocalTokensToServer({
@@ -1925,15 +1925,15 @@ const goToServerTasks = async () => {
       );
     } else {
       message.success(
-        `已同步到服务器挂机：新增 ${result.created} 个，更新 ${result.updated} 个`,
+        `已同步到 NAS：新增 ${result.created} 个，更新 ${result.updated} 个`,
       );
     }
   } catch (error) {
     message.error(`同步到服务器失败：${error.message}`);
   } finally {
-    syncingServer.value = false;
+    syncingNasAccounts.value = false;
   }
-  await router.push("/admin/server-tasks");
+  await router.push("/admin/batch-daily-tasks");
 };
 
 const goToPushingLevels = () => {

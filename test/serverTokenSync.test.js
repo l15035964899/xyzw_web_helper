@@ -35,7 +35,9 @@ test("sync updates existing role and adds a new account with local settings", as
   };
   try {
     const calls = [];
-    const server = [{ id: "server-old", roleId: 101, name: "旧账号" }];
+    const server = [
+      { id: "server-old", roleId: 101, name: "旧账号", enabled: false },
+    ];
     const request = async (path, options = {}) => {
       calls.push({ path, options });
       if (path === "/api/tokens" && !options.method) return [...server];
@@ -66,8 +68,20 @@ test("sync updates existing role and adds a new account with local settings", as
       ],
       request,
     });
-    assert.deepEqual(result, { created: 1, updated: 1, failed: 0 });
+    assert.equal(result.created, 1);
+    assert.equal(result.updated, 1);
+    assert.equal(result.failed, 0);
+    assert.deepEqual(result.tokenIdMap, {
+      "local-old": "server-old",
+      "local-new": "local-new",
+    });
+    assert.equal(result.accounts.length, 2);
     assert.ok(calls.some(({ path }) => path === "/api/tokens/server-old"));
+    const updateCall = calls.find(
+      ({ path, options }) =>
+        path === "/api/tokens/server-old" && options.method === "PATCH",
+    );
+    assert.equal(updateCall.options.body.enabled, false);
     const createCall = calls.find(({ options }) => options.method === "POST");
     assert.equal(createCall.options.body.id, "local-new");
     assert.equal(createCall.options.body.roleId, 202);

@@ -60,6 +60,14 @@ function fixture({
     },
     addLog: (log) => logs.push(log),
     message: { info() {}, warning() {}, success() {} },
+    ensureManualLease: async (ids) => {
+      state.leaseIds = ids;
+      return { id: "lease-a", token_ids: ids };
+    },
+    setBrowserLogContext() {},
+    clearBrowserLogContext() {},
+    flushBrowserLogs: async () => {},
+    scheduleTokenValue: (token) => token.serverAccountId || token.id,
     setTimeout: (callback) => {
       callback();
     },
@@ -92,6 +100,12 @@ function fixture({
   );
   return { context, state, logs, ...context.api };
 }
+
+test("manual batch execution acquires a NAS lease before connecting", async () => {
+  const f = fixture();
+  await f.startBatch();
+  assert.deepEqual(f.state.leaseIds, ["account-a"]);
+});
 
 test("batch rate-limit failure executes once and preserves another caller's connection and slot", async () => {
   const f = fixture({ runError: new Error("200400 操作太快") });

@@ -63,7 +63,7 @@ function readLocalSettings(tokenId) {
  * @param {object} options Sync inputs and API transport.
  * @param {Array} options.tokens Browser token records.
  * @param {Function} options.request Authenticated server request function.
- * @returns {Promise<{created:number,updated:number,failed:number}>} Sync counts.
+ * @returns {Promise<{created:number,updated:number,failed:number,tokenIdMap:object,accounts:Array}>} Sync counts, ID map and resulting accounts.
  */
 export async function syncLocalTokensToServer({ tokens = [], request }) {
   const current = await request("/api/tokens");
@@ -76,6 +76,7 @@ export async function syncLocalTokensToServer({ tokens = [], request }) {
   let created = 0;
   let updated = 0;
   let failed = 0;
+  const tokenIdMap = {};
 
   for (const token of tokens) {
     try {
@@ -94,14 +95,20 @@ export async function syncLocalTokensToServer({ tokens = [], request }) {
         ws_url: token.wsUrl || null,
         server: token.server || null,
         daily_settings: readLocalSettings(token.id),
-        enabled: true,
+        enabled: existing ? Boolean(existing.enabled) : token.enabled !== false,
       };
 
       if (existing) {
-        await request(`/api/tokens/${encodeURIComponent(existing.id)}`, {
+        const [updatedToken] = await request(
+          `/api/tokens/${encodeURIComponent(existing.id)}`,
+          {
           method: "PATCH",
           body,
-        });
+          },
+        );
+        const index = serverTokens.findIndex((item) => item.id === existing.id);
+        if (index >= 0 && updatedToken) serverTokens[index] = updatedToken;
+        tokenIdMap[token.id] = existing.id;
         updated += 1;
       } else {
         const [createdToken] = await request("/api/tokens", {
@@ -109,6 +116,7 @@ export async function syncLocalTokensToServer({ tokens = [], request }) {
           body: { ...body, id: token.id },
         });
         serverTokens.push(createdToken);
+        tokenIdMap[token.id] = createdToken.id;
         if (roleId != null) {
           byRoleId.set(String(roleId), createdToken);
         }
@@ -119,5 +127,11 @@ export async function syncLocalTokensToServer({ tokens = [], request }) {
     }
   }
 
-  return { created, updated, failed };
+  return {
+    created,
+    updated,
+    failed,
+    tokenIdMap,
+    accounts: serverTokens,
+  };
 }

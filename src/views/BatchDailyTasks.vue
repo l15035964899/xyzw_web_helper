@@ -28,7 +28,7 @@
               "
             >
               <div style="font-size: 14px; color: #495057">
-                共 {{ scheduledTasks.length }} 个定时任务
+                共 {{ scheduledTasks.length }} 个 NAS 定时任务
               </div>
               <div
                 v-if="shortestCountdownTask"
@@ -45,8 +45,22 @@
                 <n-button type="primary" size="small" @click="openTaskModal">
                   新增定时任务
                 </n-button>
-                <n-button size="small" @click="showTasksModal = true">
+                <n-button
+                  size="small"
+                  :loading="scheduledTasksLoading"
+                  @click="showTasksModal = true"
+                >
                   查看定时任务
+                </n-button>
+                <n-button size="small" @click="openServerAccounts">
+                  NAS 账号
+                </n-button>
+                <n-button
+                  size="small"
+                  :loading="syncingNasAccounts"
+                  @click="syncAccountsToNas"
+                >
+                  同步账号
                 </n-button>
                 <n-button size="small" @click="exportConfig">
                   导出配置
@@ -730,10 +744,14 @@
                 <span
                   style="margin-left: 12px; font-size: 12px; color: #86909c"
                 >
-                  {{ logs.length }}/{{ batchSettings.maxLogEntries || 1000 }}
+                  {{ displayLogs.length }}
                 </span>
               </div>
               <div class="log-header-controls">
+                <n-radio-group v-model:value="logSource" size="small">
+                  <n-radio-button value="local">本页</n-radio-button>
+                  <n-radio-button value="server">NAS</n-radio-button>
+                </n-radio-group>
                 <n-checkbox v-model:checked="autoScrollLog" size="small">
                   自动滚动
                 </n-checkbox>
@@ -743,6 +761,14 @@
                 <n-tag v-if="errorCount > 0" type="error" size="small">
                   {{ errorCount }} 个错误
                 </n-tag>
+                <n-button
+                  v-if="logSource === 'server'"
+                  size="small"
+                  :loading="serverLogsLoading"
+                  @click="loadServerLogs"
+                >
+                  刷新
+                </n-button>
                 <n-button size="small" @click="clearLogs"> 清空日志 </n-button>
                 <n-button size="small" @click="copyLogs"> 复制日志 </n-button>
               </div>
@@ -980,7 +1006,9 @@
                   size="small"
                   @click="
                     () => {
-                      const groupTokenIds = getValidGroupTokenIds(group.id);
+                      const groupTokenIds = getValidGroupTokenIds(
+                        group.id,
+                      ).map(scheduleTokenValue);
                       groupTokenIds.forEach((id) => {
                         if (!selectedTokensForApply.includes(id)) {
                           selectedTokensForApply.push(id);
@@ -1868,6 +1896,74 @@
       </div>
     </n-modal>
 
+    <!-- NAS Accounts Modal -->
+    <n-modal
+      v-model:show="showServerAccountsModal"
+      preset="card"
+      title="NAS 账号"
+      style="width: 90%; max-width: 680px"
+    >
+      <n-space vertical :size="12">
+        <n-space justify="space-between">
+          <n-text depth="3">
+            共 {{ serverAccounts.length }} 个账号，定时任务使用 NAS 账号 ID。
+          </n-text>
+          <n-space>
+            <n-button size="small" @click="loadServerAccounts">
+              刷新
+            </n-button>
+            <n-button
+              size="small"
+              type="primary"
+              :loading="syncingNasAccounts"
+              @click="syncAccountsToNas"
+            >
+              同步本机账号
+            </n-button>
+          </n-space>
+        </n-space>
+        <div
+          v-for="account in serverAccounts"
+          :key="account.id"
+          class="task-item"
+          style="
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 10px 12px;
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+          "
+        >
+          <div>
+            <div style="font-weight: 600">{{ account.name }}</div>
+            <div style="font-size: 12px; color: #86909c">
+              {{ account.server || "未知区服" }} · ID
+              {{ account.roleId || account.role_id || "-" }}
+            </div>
+          </div>
+          <n-space>
+            <n-switch
+              :value="Boolean(account.enabled)"
+              @update:value="toggleServerAccount(account, $event)"
+            />
+            <n-button
+              size="small"
+              type="error"
+              secondary
+              @click="deleteServerAccount(account)"
+            >
+              删除
+            </n-button>
+          </n-space>
+        </div>
+        <n-empty
+          v-if="serverAccounts.length === 0"
+          description="NAS 中还没有账号"
+        />
+      </n-space>
+    </n-modal>
+
     <!-- Task Modal -->
     <n-modal
       v-model:show="showTaskModal"
@@ -2024,10 +2120,10 @@
             <n-checkbox-group v-model:value="taskForm.selectedTokens">
               <n-grid :cols="2" :x-gap="12" :y-gap="8">
                 <n-grid-item
-                  v-for="gameToken in sortedTokens"
+                  v-for="gameToken in scheduleTokens"
                   :key="gameToken.id"
                 >
-                  <n-checkbox :value="gameToken.id">{{
+                  <n-checkbox :value="scheduleTokenValue(gameToken)">{{
                     gameToken.name
                   }}</n-checkbox>
                 </n-grid-item>
@@ -2508,36 +2604,6 @@
                   :min="100"
                   :max="5000"
                   :step="100"
-                  size="small"
-                  style="width: 100px"
-                />
-              </div>
-              <div
-                class="setting-item"
-                style="
-                  flex-direction: row;
-                  justify-content: space-between;
-                  align-items: center;
-                "
-              >
-                <label class="setting-label">定时刷新页面</label>
-                <n-switch v-model:value="batchSettings.enableRefresh" />
-              </div>
-              <div
-                class="setting-item"
-                style="
-                  flex-direction: row;
-                  justify-content: space-between;
-                  align-items: center;
-                "
-                v-if="batchSettings.enableRefresh"
-              >
-                <label class="setting-label">刷新间隔(分钟)</label>
-                <n-input-number
-                  v-model:value="batchSettings.refreshInterval"
-                  :min="10"
-                  :max="1440"
-                  :step="30"
                   size="small"
                   style="width: 100px"
                 />
@@ -3045,7 +3111,7 @@
 <script setup>
 import { Settings } from "@vicons/ionicons5";
 
-import { useMessage } from "naive-ui";
+import { useDialog, useMessage } from "naive-ui";
 // Import required dependencies
 import {
   computed,
@@ -3057,6 +3123,19 @@ import {
   ref,
   watch,
 } from "vue";
+import {
+  deleteServerSchedule,
+  loadServerBatchSettings,
+  loadServerSchedules,
+  loadServerTaskLogs,
+  loadServerTaskRuntime,
+  previewServerCron,
+  requestBatchServer,
+  runServerSchedule,
+  saveServerBatchSettings,
+  saveServerSchedule,
+  setServerScheduleEnabled,
+} from "@/api/batchSchedules";
 import { $emit } from "@/stores/events/index.ts";
 import { gameTokens, tokenGroups, useTokenStore } from "@/stores/tokenStore";
 // Import batch task modules
@@ -3068,7 +3147,6 @@ import {
   boxTypeOptions,
   calculateMonthProgress,
   calculateNextExecutionTime,
-  calculateNextRuns,
   createTasksApex,
   createTasksArena,
   createTasksBottle,
@@ -3087,9 +3165,7 @@ import {
   formatTimeDifference,
   getTodayStartSec,
   isTodayAvailable,
-  matchesCronExpression,
   pickArenaTargetId,
-  validateCronExpression,
 } from "@/utils/batch";
 import {
   blackMarketItemCatalog,
@@ -3097,16 +3173,30 @@ import {
   defaultBlackMarketPurchaseList,
   normalizeBlackMarketPurchaseList,
 } from "@/utils/batch/blackMarketConfig";
+import {
+  clearBrowserLogContext,
+  flushBrowserLogs,
+  queueBrowserLog,
+  setBrowserLogContext,
+  startBrowserLogPersistence,
+  stopBrowserLogPersistence,
+} from "@/utils/browserLogPersistence";
 import { DailyTaskRunner } from "@/utils/dailyTaskRunner";
 import { goldItemsConfig, merchantConfig } from "@/utils/dreamConstants";
-
 import { isSameGameValue } from "@/utils/gameValue.js";
+import {
+  ensureManualLease,
+  releaseManualLease,
+} from "@/utils/manualLease";
+import { readNasTokenIdMap } from "@/utils/nasTokenBootstrap";
+import { syncLocalTokensToServer } from "@/utils/serverTokenSync";
 
 import { DEFAULT_WEIRD_TOWER_MAX_CLIMB } from "@/utils/towerClimbLimit.js";
 
 // Initialize token store, message service, and task runner
 const tokenStore = useTokenStore();
 const message = useMessage();
+const dialog = useDialog();
 const weirdTowerMaxClimb = ref(DEFAULT_WEIRD_TOWER_MAX_CLIMB);
 
 // 排序配置（从localStorage读取，与TokenImport共享）
@@ -3406,6 +3496,7 @@ const fetchWarGuessRank = async () => {
   const token = tokens.value.find((t) => t.id === tokenId);
 
   warGuessLoading.value = true;
+  let ownsSlot = false;
   try {
     addLog({
       time: new Date().toLocaleTimeString(),
@@ -3413,12 +3504,9 @@ const fetchWarGuessRank = async () => {
       type: "info",
     });
 
-    // Ensure connection
-    const status = tokenStore.getWebSocketStatus(tokenId);
-    if (status !== "connected") {
-      tokenStore.createWebSocketConnection(tokenId, token.token, token.wsUrl);
-      await new Promise((r) => setTimeout(r, 2000)); // Wait for connection
-    }
+    await ensureConnection(tokenId, 2, (owned) => {
+      ownsSlot = owned;
+    });
 
     // Fetch rank
     const res = await tokenStore.sendMessageWithPromise(
@@ -3453,6 +3541,9 @@ const fetchWarGuessRank = async () => {
     });
   } finally {
     warGuessLoading.value = false;
+    tokenStore.closeWebSocketConnection(tokenId);
+    if (ownsSlot) releaseConnectionSlot();
+    await releaseManualLease();
   }
 };
 
@@ -3499,6 +3590,7 @@ const fetchApplyLegionTargetInfo = async () => {
   applyLegionLoading.value = true;
   applyLegionError.value = "";
   applyLegionPreview.value = null;
+  let ownsSlot = false;
 
   try {
     addLog({
@@ -3507,11 +3599,9 @@ const fetchApplyLegionTargetInfo = async () => {
       type: "info",
     });
 
-    const status = tokenStore.getWebSocketStatus(tokenId);
-    if (status !== "connected") {
-      tokenStore.createWebSocketConnection(tokenId, token.token, token.wsUrl);
-      await new Promise((r) => setTimeout(r, 2000));
-    }
+    await ensureConnection(tokenId, 2, (owned) => {
+      ownsSlot = owned;
+    });
 
     applyLegionPreview.value = await queryLegionById(
       tokenId,
@@ -3534,6 +3624,9 @@ const fetchApplyLegionTargetInfo = async () => {
     message.error(applyLegionError.value);
   } finally {
     applyLegionLoading.value = false;
+    tokenStore.closeWebSocketConnection(tokenId);
+    if (ownsSlot) releaseConnectionSlot();
+    await releaseManualLease();
   }
 };
 
@@ -3683,8 +3776,8 @@ const batchSettings = reactive({
   refreshInterval: 360, // 分钟
 });
 
-// Load batch settings from localStorage
-const loadBatchSettings = () => {
+// Load batch settings from NAS with a local cache fallback.
+const loadBatchSettings = async ({ fromServer = false } = {}) => {
   try {
     const saved = localStorage.getItem("batchSettings");
     if (saved) {
@@ -3698,16 +3791,55 @@ const loadBatchSettings = () => {
         ? batchSettings.blackMarketPurchaseList
         : createDefaultBlackMarketPurchaseList(),
     );
+    if (fromServer) {
+      const serverSettings = await loadServerBatchSettings();
+      if (serverSettings?._initialized) {
+        Object.assign(batchSettings, serverSettings);
+      } else if (saved) {
+        const migrated = await saveServerBatchSettings(
+          serverBatchSettingsPayload(),
+        );
+        Object.assign(batchSettings, migrated || {});
+      } else {
+        Object.assign(batchSettings, serverSettings || {});
+      }
+      weirdTowerMaxClimb.value =
+        Number(serverSettings?.weirdTowerMaxClimb) || weirdTowerMaxClimb.value;
+      giftQuantity.value =
+        Number(serverSettings?.giftQuantity) || giftQuantity.value;
+      localStorage.setItem("batchSettings", JSON.stringify(batchSettings));
+    }
   } catch (error) {
     console.error("Failed to load batch settings:", error);
   }
 };
 
-// Save batch settings to localStorage
-const saveBatchSettings = () => {
+const serverBatchSettingsPayload = () => ({
+  dreamPurchaseList: [...batchSettings.dreamPurchaseList],
+  blackMarketPurchaseList: batchSettings.blackMarketPurchaseList.map(
+    (item) => ({ ...item }),
+  ),
+  boxCount: batchSettings.boxCount,
+  fishCount: batchSettings.fishCount,
+  recruitCount: batchSettings.recruitCount,
+  cdkCodes: batchSettings.cdkCodes,
+  cdkPlatformType: batchSettings.cdkPlatformType,
+  defaultBoxType: batchSettings.defaultBoxType,
+  defaultFishType: batchSettings.defaultFishType,
+  targetBoxPoints: batchSettings.targetBoxPoints,
+  receiverId: batchSettings.receiverId,
+  password: batchSettings.password,
+  weirdTowerMaxClimb: weirdTowerMaxClimb.value,
+  giftQuantity: giftQuantity.value,
+});
+
+// Save NAS-owned execution settings and mirror them locally.
+const saveBatchSettings = async () => {
   try {
+    const saved = await saveServerBatchSettings(serverBatchSettingsPayload());
+    Object.assign(batchSettings, saved || {});
     localStorage.setItem("batchSettings", JSON.stringify(batchSettings));
-    message.success("定时批量任务设置已保存");
+    message.success("NAS 定时任务设置已保存");
     showBatchSettingsModal.value = false;
   } catch (error) {
     console.error("Failed to save batch settings:", error);
@@ -3717,12 +3849,9 @@ const saveBatchSettings = () => {
 
 // Open batch settings modal
 const openBatchSettings = () => {
-  loadBatchSettings();
+  loadBatchSettings({ fromServer: true });
   showBatchSettingsModal.value = true;
 };
-
-// Load settings on component mount
-loadBatchSettings();
 
 // ======================
 // Legacy Gift Feature
@@ -3736,6 +3865,17 @@ const recipientInfo = ref(null);
 const isQueryingRecipient = ref(false);
 const giftQuantity = ref(10);
 const securityPassword = ref(""); // 安全密码
+let supplementalSettingsSaveTimer = null;
+watch([weirdTowerMaxClimb, giftQuantity], () => {
+  if (supplementalSettingsSaveTimer) {
+    clearTimeout(supplementalSettingsSaveTimer);
+  }
+  supplementalSettingsSaveTimer = setTimeout(() => {
+    saveServerBatchSettings(serverBatchSettingsPayload()).catch((error) => {
+      console.warn("保存 NAS 扩展任务设置失败:", error.message);
+    });
+  }, 500);
+});
 // 头像加载状态
 const isAvatarLoading = ref(false);
 const avatarLoadError = ref(false);
@@ -3746,10 +3886,34 @@ const avatarLoadError = ref(false);
 
 // Scheduled Tasks State Management
 const scheduledTasks = ref([]); // List of all scheduled tasks
+const scheduledTasksLoading = ref(false);
+const serverAccounts = ref([]);
+const showServerAccountsModal = ref(false);
+const syncingNasAccounts = ref(false);
+const nasTokenIdMap = ref(readNasTokenIdMap());
 const showTaskModal = ref(false); // Control the visibility of the add/edit task modal
 const showTasksModal = ref(false); // Control the visibility of the tasks list modal
 const showRedeemCodeModal = ref(false); // Control the visibility of the redeem code modal
 const editingTask = ref(null); // Currently editing task
+
+function scheduleTokenValue(token) {
+  return (
+    nasTokenIdMap.value[token?.id] ||
+    token?.serverAccountId ||
+    token?.nasId ||
+    token?.id
+  );
+}
+
+const scheduleTokens = computed(() => {
+  const seen = new Set();
+  return sortedTokens.value.filter((token) => {
+    const id = String(scheduleTokenValue(token));
+    if (seen.has(id)) return false;
+    seen.add(id);
+    return true;
+  });
+});
 const taskForm = reactive({
   name: "", // Task name
   runType: "daily", // 'daily' or 'cron'
@@ -3869,19 +4033,22 @@ const executingTaskIds = ref([]);
 const manualExecuteTask = async (task) => {
   if (executingTaskIds.value.includes(task.id)) return;
 
-  // Reset stop flag if not running, to allow manual execution
-  if (!isRunning.value && shouldStop.value) {
-    shouldStop.value = false;
-  }
-
   executingTaskIds.value.push(task.id);
   try {
-    message.info(`开始执行任务: ${task.name}`);
-    await executeScheduledTask(task);
-    message.success(`任务 ${task.name} 执行完成`);
+    message.info(`已在 NAS 触发任务: ${task.name}`);
+    await runServerSchedule(task.id);
+    if (logSource.value === "server") await loadServerLogs();
+    while (true) {
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+      const runtime = await loadServerTaskRuntime();
+      if (!runtime.runningTaskIds?.includes(task.id)) break;
+      await loadServerLogs();
+    }
+    await Promise.all([loadScheduledTasks(), loadServerLogs()]);
+    message.success(`${task.name} 已在 NAS 执行结束`);
   } catch (e) {
     console.error(`执行任务 ${task.name} 失败:`, e);
-    message.error(`任务 ${task.name} 执行失败`);
+    message.error(`NAS 任务 ${task.name} 执行失败：${e.message}`);
   } finally {
     executingTaskIds.value = executingTaskIds.value.filter(
       (id) => id !== task.id,
@@ -3889,40 +4056,105 @@ const manualExecuteTask = async (task) => {
   }
 };
 
-// Load scheduled tasks from localStorage
-const loadScheduledTasks = () => {
+// Load scheduled tasks from NAS
+const loadScheduledTasks = async () => {
+  scheduledTasksLoading.value = true;
   try {
-    const saved = localStorage.getItem("scheduledTasks");
-
-    if (saved) {
-      const parsed = JSON.parse(saved);
-
-      // Ensure we have an array
-      scheduledTasks.value = Array.isArray(parsed) ? parsed : [];
-    } else {
-      scheduledTasks.value = [];
-    }
+    scheduledTasks.value = await loadServerSchedules();
   } catch (error) {
-    console.error("Failed to load scheduled tasks:", error);
-    scheduledTasks.value = [];
+    console.error("Failed to load NAS scheduled tasks:", error);
+    message.error(`读取 NAS 定时任务失败：${error.message}`);
+  } finally {
+    scheduledTasksLoading.value = false;
   }
 };
 
-// Save scheduled tasks to localStorage
-const saveScheduledTasks = () => {
-  try {
-    const dataToSave = JSON.stringify(scheduledTasks.value);
+function scheduleFingerprint(task) {
+  const cron =
+    task.runType === "daily"
+      ? `daily:${task.runTime}`
+      : `cron:${String(task.cronExpression || "").trim().replace(/\s+/g, " ")}`;
+  return JSON.stringify([
+    cron,
+    [...(task.selectedTasks || [])].sort(),
+    [...(task.selectedTokens || [])].map(String).sort(),
+  ]);
+}
 
-    localStorage.setItem("scheduledTasks", dataToSave);
-    // Verify save was successful
-    localStorage.getItem("scheduledTasks");
-  } catch (error) {
-    console.error("Failed to save scheduled tasks:", error);
+const migrateLegacyScheduledTasks = async () => {
+  let legacyTasks;
+  try {
+    legacyTasks = JSON.parse(localStorage.getItem("scheduledTasks") || "[]");
+  } catch {
+    return { imported: 0, skipped: 0, failed: 0 };
   }
+  if (!Array.isArray(legacyTasks) || legacyTasks.length === 0) {
+    return { imported: 0, skipped: 0, failed: 0 };
+  }
+
+  const existing = await loadServerSchedules();
+  const existingLegacyIds = new Set(
+    existing.map((task) => task.legacyId).filter(Boolean),
+  );
+  const fingerprints = new Set(existing.map(scheduleFingerprint));
+  const serverIds = new Set(serverAccounts.value.map((account) => String(account.id)));
+  let imported = 0;
+  let skipped = 0;
+  let failed = 0;
+
+  for (const legacy of legacyTasks) {
+    try {
+      if (legacy.id && existingLegacyIds.has(legacy.id)) {
+        skipped += 1;
+        continue;
+      }
+      const selectedTokens = (legacy.selectedTokens || [])
+        .map((id) => nasTokenIdMap.value[id] || id)
+        .map(String)
+        .filter((id) => serverIds.has(id));
+      if (
+        selectedTokens.length !== (legacy.selectedTokens || []).length ||
+        selectedTokens.length === 0
+      ) {
+        failed += 1;
+        continue;
+      }
+      const candidate = {
+        ...legacy,
+        id: undefined,
+        legacyId: legacy.id || null,
+        selectedTokens,
+        serverOptions: {},
+      };
+      const fingerprint = scheduleFingerprint(candidate);
+      if (fingerprints.has(fingerprint)) {
+        skipped += 1;
+        continue;
+      }
+      await saveServerSchedule(candidate);
+      fingerprints.add(fingerprint);
+      if (legacy.id) existingLegacyIds.add(legacy.id);
+      imported += 1;
+    } catch {
+      failed += 1;
+    }
+  }
+
+  localStorage.setItem(
+    "scheduledTasks.browserBackup",
+    JSON.stringify(legacyTasks),
+  );
+  return { imported, skipped, failed };
 };
 
 // Open task modal for adding new task
-const openTaskModal = () => {
+const openTaskModal = async () => {
+  try {
+    await syncAccountsToNas({ quiet: true });
+  } catch (error) {
+    message.error(`同步账号后才能创建定时任务：${error.message}`);
+    return;
+  }
   editingTask.value = null;
   Object.assign(taskForm, {
     name: "",
@@ -3939,7 +4171,13 @@ const openTaskModal = () => {
 };
 
 // Edit existing task
-const editTask = (task) => {
+const editTask = async (task) => {
+  try {
+    await syncAccountsToNas({ quiet: true });
+  } catch (error) {
+    message.error(`同步账号后才能编辑定时任务：${error.message}`);
+    return;
+  }
   editingTask.value = task;
   const taskData = { ...task };
   if (
@@ -3972,41 +4210,44 @@ const editTask = (task) => {
   showTaskModal.value = true;
 };
 
-// 注: validateCronExpression 已从 @/utils/batch 导入
+let cronPreviewTimer = null;
+let cronPreviewSequence = 0;
 
-// Parse cron expression and calculate next execution times
+// Validate and preview Cron with NAS as the authoritative source.
 const parseCronExpression = (expression) => {
-  // Validate the expression first
-  const validation = validateCronExpression(expression);
-  cronValidation.value = validation;
-
-  if (!validation.valid) {
+  if (cronPreviewTimer) clearTimeout(cronPreviewTimer);
+  const value = String(expression || "").trim();
+  if (!value) {
+    cronValidation.value = { valid: false, message: "请输入 Cron 表达式" };
     cronNextRuns.value = [];
     return;
   }
-
-  // Parse the expression and calculate next runs
-  const cronParts = expression.split(" ").filter(Boolean);
-  const [minuteField, hourField, dayOfMonthField, monthField, dayOfWeekField] =
-    cronParts;
-
-  // Calculate next 5 execution times
-  const nextRuns = calculateNextRuns(
-    minuteField,
-    hourField,
-    dayOfMonthField,
-    monthField,
-    dayOfWeekField,
-    5,
-  );
-  cronNextRuns.value = nextRuns;
+  const sequence = ++cronPreviewSequence;
+  cronPreviewTimer = setTimeout(async () => {
+    try {
+      const preview = await previewServerCron(value);
+      if (sequence !== cronPreviewSequence) return;
+      cronValidation.value = {
+        valid: Boolean(preview.valid),
+        message: preview.message,
+      };
+      cronNextRuns.value = (preview.nextRuns || []).map((run) =>
+        new Date(run).toLocaleString("zh-CN", {
+          timeZone: "Asia/Shanghai",
+          hour12: false,
+        }),
+      );
+    } catch (error) {
+      if (sequence !== cronPreviewSequence) return;
+      cronValidation.value = { valid: false, message: error.message };
+      cronNextRuns.value = [];
+    }
+  }, 300);
 };
 
-// 注: calculateNextRuns 已从 @/utils/batch 导入
-
 // Save task (create or update)
-const saveTask = () => {
-  if (!taskForm.name) {
+const saveTask = async () => {
+  if (!taskForm.name.trim()) {
     message.warning("请输入任务名称");
     return;
   }
@@ -4022,10 +4263,14 @@ const saveTask = () => {
       return;
     }
 
-    // Validate cron expression
-    const validation = validateCronExpression(taskForm.cronExpression);
-    if (!validation.valid) {
-      message.warning(validation.message);
+    try {
+      const preview = await previewServerCron(taskForm.cronExpression);
+      if (!preview.valid) {
+        message.warning(preview.message);
+        return;
+      }
+    } catch (error) {
+      message.warning(error.message);
       return;
     }
   }
@@ -4051,17 +4296,19 @@ const saveTask = () => {
   // Format runTime as string for storage
   let formattedRunTime = null;
   if (taskForm.runType === "daily" && taskForm.runTime) {
-    const time = new Date(taskForm.runTime);
-    formattedRunTime = time.toLocaleTimeString("zh-CN", {
-      hour12: false,
-      hour: "2-digit",
-      minute: "2-digit",
-    });
+    if (typeof taskForm.runTime === "string") {
+      formattedRunTime = taskForm.runTime;
+    } else {
+      const time = new Date(taskForm.runTime);
+      formattedRunTime = `${String(time.getHours()).padStart(2, "0")}:${String(
+        time.getMinutes(),
+      ).padStart(2, "0")}`;
+    }
   }
 
   const taskData = {
-    id: editingTask.value?.id || `task_${Date.now()}`,
-    name: taskForm.name,
+    id: editingTask.value?.id,
+    name: taskForm.name.trim(),
     runType: taskForm.runType,
     runTime: formattedRunTime,
     cronExpression: taskForm.runType === "cron" ? taskForm.cronExpression : "",
@@ -4072,21 +4319,16 @@ const saveTask = () => {
   };
 
   const isNew = !editingTask.value;
-
-  if (editingTask.value) {
-    // Update existing task
-    const index = scheduledTasks.value.findIndex(
-      (t) => t.id === editingTask.value.id,
-    );
-    if (index !== -1) {
-      scheduledTasks.value[index] = taskData;
-    }
-  } else {
-    // Add new task
-    scheduledTasks.value.push(taskData);
+  try {
+    await saveServerSchedule(taskData, {
+      taskId: editingTask.value?.id,
+      existingOptions: editingTask.value?.serverOptions || {},
+    });
+    await loadScheduledTasks();
+  } catch (error) {
+    message.error(`保存 NAS 定时任务失败：${error.message}`);
+    return;
   }
-
-  saveScheduledTasks();
 
   // Add log entry for task save
   addTaskSaveLog(taskData, isNew, addLog);
@@ -4096,11 +4338,16 @@ const saveTask = () => {
 };
 
 // Delete task
-const deleteTask = (taskId) => {
+const deleteTask = async (taskId) => {
   const task = scheduledTasks.value.find((t) => t.id === taskId);
   if (task) {
-    scheduledTasks.value = scheduledTasks.value.filter((t) => t.id !== taskId);
-    saveScheduledTasks();
+    try {
+      await deleteServerSchedule(taskId);
+      await loadScheduledTasks();
+    } catch (error) {
+      message.error(`删除 NAS 定时任务失败：${error.message}`);
+      return;
+    }
     addLog({
       time: new Date().toLocaleTimeString(),
       message: `=== 定时任务 ${task.name} 已删除 ===`,
@@ -4111,11 +4358,16 @@ const deleteTask = (taskId) => {
 };
 
 // Toggle task enabled state
-const toggleTaskEnabled = (taskId, enabled) => {
+const toggleTaskEnabled = async (taskId, enabled) => {
   const task = scheduledTasks.value.find((t) => t.id === taskId);
   if (task) {
-    task.enabled = enabled;
-    saveScheduledTasks();
+    try {
+      await setServerScheduleEnabled(taskId, enabled);
+      await loadScheduledTasks();
+    } catch (error) {
+      message.error(`更新 NAS 定时任务失败：${error.message}`);
+      return;
+    }
     message.success(`定时任务已${enabled ? "启用" : "禁用"}`);
     addLog({
       time: new Date().toLocaleTimeString(),
@@ -4138,7 +4390,10 @@ const resetRunType = () => {
 
 // Select all tokens
 const selectAllTokens = () => {
-  taskForm.selectedTokens = tokens.value.map((token) => token.id);
+  taskForm.selectedTokens = tokens.value
+    .map((token) => scheduleTokenValue(token))
+    .filter(Boolean)
+    .filter((value, index, values) => values.indexOf(value) === index);
 };
 
 // Deselect all tokens
@@ -4163,17 +4418,22 @@ const deselectAllTasks = () => {
 // Export all tokens and scheduled tasks configuration
 const exportConfig = () => {
   try {
-    // Get all valid token IDs
-    const validTokenIds = new Set(tokens.value.map((t) => t.id));
+    const serverToLocal = new Map(
+      tokens.value.map((token) => [
+        String(scheduleTokenValue(token)),
+        token.id,
+      ]),
+    );
+    const validTokenIds = new Set(tokens.value.map((token) => token.id));
 
     // Filter scheduled tasks: remove invalid token IDs from selectedTokens
     const filteredScheduledTasks = scheduledTasks.value
       .map((task) => ({
         ...task,
         selectedTokens:
-          task.selectedTokens?.filter((tokenId) =>
-            validTokenIds.has(tokenId),
-          ) || [],
+          task.selectedTokens
+            ?.map((tokenId) => serverToLocal.get(String(tokenId)))
+            .filter((tokenId) => tokenId && validTokenIds.has(tokenId)) || [],
       }))
       .filter((task) => task.selectedTokens.length > 0); // Remove tasks with no valid tokens
 
@@ -4211,12 +4471,7 @@ const exportConfig = () => {
       })),
       scheduledTasks: filteredScheduledTasks,
       batchSettings: {
-        boxCount: batchSettings.boxCount,
-        fishCount: batchSettings.fishCount,
-        recruitCount: batchSettings.recruitCount,
-        defaultBoxType: batchSettings.defaultBoxType,
-        defaultFishType: batchSettings.defaultFishType,
-        blackMarketPurchaseList: batchSettings.blackMarketPurchaseList,
+        ...serverBatchSettingsPayload(),
         commandDelay: batchSettings.commandDelay,
         taskDelay: batchSettings.taskDelay,
         actionDelay: batchSettings.actionDelay,
@@ -4254,7 +4509,7 @@ const exportConfig = () => {
 const importConfig = async ({ file }) => {
   try {
     const reader = new FileReader();
-    reader.onload = (e) => {
+    reader.onload = async (e) => {
       try {
         const importData = JSON.parse(e.target.result);
 
@@ -4302,29 +4557,45 @@ const importConfig = async ({ file }) => {
           });
         }
 
-        // Import scheduled tasks
+        // Stage browser-format tasks for idempotent migration after tokens sync.
         if (Array.isArray(importData.scheduledTasks)) {
-          importData.scheduledTasks.forEach((task) => {
-            // Check if task already exists
-            const exists = scheduledTasks.value.some((t) => t.id === task.id);
-            if (!exists && task.id) {
-              scheduledTasks.value.push(task);
-              importedTasks++;
+          let staged = [];
+          try {
+            staged = JSON.parse(
+              localStorage.getItem("scheduledTasks") || "[]",
+            );
+          } catch {
+            staged = [];
+          }
+          const stagedIds = new Set(staged.map((task) => task.id));
+          for (const task of importData.scheduledTasks) {
+            const id = task.id || `import_${Date.now()}_${staged.length}`;
+            if (!stagedIds.has(id)) {
+              staged.push({ ...task, id });
+              stagedIds.add(id);
+              importedTasks += 1;
             }
-          });
-          saveScheduledTasks();
+          }
+          localStorage.setItem("scheduledTasks", JSON.stringify(staged));
         }
 
         // Import batch settings if provided
         if (importData.batchSettings) {
           Object.assign(batchSettings, importData.batchSettings);
+          weirdTowerMaxClimb.value =
+            Number(importData.batchSettings.weirdTowerMaxClimb) ||
+            weirdTowerMaxClimb.value;
+          giftQuantity.value =
+            Number(importData.batchSettings.giftQuantity) ||
+            giftQuantity.value;
           batchSettings.blackMarketPurchaseList =
             normalizeBlackMarketPurchaseList(
               batchSettings.blackMarketPurchaseList?.length
                 ? batchSettings.blackMarketPurchaseList
                 : createDefaultBlackMarketPurchaseList(),
             );
-          saveBatchSettings();
+          await saveServerBatchSettings(serverBatchSettingsPayload());
+          localStorage.setItem("batchSettings", JSON.stringify(batchSettings));
         }
 
         // Import token settings
@@ -4339,8 +4610,11 @@ const importConfig = async ({ file }) => {
           });
         }
 
+        await syncAccountsToNas({ quiet: true });
+        const migrated = await migrateLegacyScheduledTasks();
+        await loadScheduledTasks();
         message.success(
-          `导入成功: ${importedTokens} 个新账号, ${importedTasks} 个新定时任务`,
+          `导入成功: ${importedTokens} 个新账号, ${importedTasks} 个新配置项；NAS 新增 ${migrated.imported} 个任务`,
         );
       } catch (parseError) {
         console.error("Parse error:", parseError);
@@ -4358,7 +4632,7 @@ const importConfig = async ({ file }) => {
 // Scheduled Tasks Countdown
 // ======================
 
-// 注: parseCronField, calculateNextExecutionTime, formatTimeDifference 已从 @/utils/batch 导入
+// 注: calculateNextExecutionTime 与 formatTimeDifference 已从 @/utils/batch 导入
 
 // Task countdowns ref
 const taskCountdowns = ref({});
@@ -4375,12 +4649,16 @@ const updateCountdowns = () => {
       return;
     }
 
+    if (!nextExecutionTimes.value[task.id] && task.nextRunAt) {
+      nextExecutionTimes.value[task.id] = new Date(task.nextRunAt).getTime();
+    }
+
     if (
       !nextExecutionTimes.value[task.id] ||
       nextExecutionTimes.value[task.id] <= now
     ) {
-      // Calculate next execution time if not set or passed
-      nextExecutionTimes.value[task.id] = calculateNextExecutionTime(task);
+      nextExecutionTimes.value[task.id] =
+        calculateNextExecutionTime(task) || null;
     }
 
     if (nextExecutionTimes.value[task.id]) {
@@ -4438,9 +4716,6 @@ const startCountdown = () => {
 // Scheduled Tasks Scheduler
 // ======================
 
-// Initialize scheduled tasks from localStorage
-loadScheduledTasks();
-
 // Watch for changes to scheduledTasks for debugging
 watch(
   scheduledTasks,
@@ -4464,148 +4739,114 @@ watch(
   },
 );
 
-// Task scheduler variables - moved to component level scope
-const intervalId = ref(null);
-let lastTaskExecution = null;
-let healthCheckInterval = null;
-const pageLoadTime = Date.now();
+let nextRunRefreshTimer = null;
+let accountSyncPromise = null;
 
-// Health check for the scheduler
-const healthCheck = () => {
-  // If interval is not running, restart it
-  if (!intervalId.value) {
-    console.error(
-      `[${new Date().toISOString()}] Task scheduler interval is not running, restarting...`,
-    );
-    startScheduler();
-  }
-
-  // Add a safety mechanism to prevent isRunning from being stuck
-  if (isRunning.value) {
-    const now = Date.now();
-    const tenMinutesAgo = now - 10 * 60 * 1000; // 10 minutes ago
-    if (lastTaskExecution && lastTaskExecution < tenMinutesAgo) {
-      console.error(
-        `[${new Date().toISOString()}] isRunning has been true for more than 10 minutes, resetting to false`,
-      );
-      isRunning.value = false;
-      addLog({
-        time: new Date().toLocaleTimeString(),
-        message: "=== 检测到任务执行超时，已重置isRunning状态 ===",
-        type: "warning",
-      });
-    }
-  }
-
-  // Check for page refresh
-  if (batchSettings.enableRefresh && batchSettings.refreshInterval > 0) {
-    const elapsedMinutes = (Date.now() - pageLoadTime) / 1000 / 60;
-    if (elapsedMinutes >= batchSettings.refreshInterval) {
-      if (!isRunning.value) {
-        console.log(
-          `[${new Date().toISOString()}] Refreshing page as scheduled (Interval: ${batchSettings.refreshInterval}m, Elapsed: ${elapsedMinutes.toFixed(1)}m)`,
-        );
-        window.location.reload();
-      } else {
-        console.log(
-          `[${new Date().toISOString()}] Scheduled refresh postponed due to running task`,
-        );
-      }
-    }
+const loadServerAccounts = async ({ quiet = false } = {}) => {
+  try {
+    const accounts = await requestBatchServer("/api/tokens");
+    serverAccounts.value = Array.isArray(accounts) ? accounts : [];
+    return serverAccounts.value;
+  } catch (error) {
+    if (!quiet) message.error(`读取 NAS 账号失败：${error.message}`);
+    throw error;
   }
 };
 
-// Start the scheduler
-const startScheduler = () => {
-  // Clear any existing interval first
-  if (intervalId.value) {
-    clearInterval(intervalId.value);
-  }
-
-  // Check every 10 seconds instead of 60 seconds for more timely task execution
-  intervalId.value = setInterval(() => {
+const syncAccountsToNas = ({ quiet = false } = {}) => {
+  if (accountSyncPromise) return accountSyncPromise;
+  syncingNasAccounts.value = true;
+  accountSyncPromise = (async () => {
     try {
-      const now = new Date();
-      const currentTime = now.toLocaleTimeString("zh-CN", {
-        hour12: false,
-        hour: "2-digit",
-        minute: "2-digit",
-        second: "2-digit",
+      const result = await syncLocalTokensToServer({
+        tokens: tokenStore.gameTokens,
+        request: requestBatchServer,
       });
-
-      // Don't skip all tasks if isRunning is true, just skip individual task execution if already running
-      const tasksToRun = scheduledTasks.value.filter((task) => task.enabled);
-
-      if (tasksToRun.length === 0) {
-        return;
-      }
-
-      tasksToRun.forEach((task) => {
-        let shouldRun = false;
-
-        if (task.runType === "daily") {
-          // Check if current time matches the scheduled time
-          const taskTime = task.runTime;
-          const nowTime = now.toLocaleTimeString("zh-CN", {
-            hour12: false,
-            hour: "2-digit",
-            minute: "2-digit",
-          });
-          shouldRun = nowTime === taskTime;
-        } else if (task.runType === "cron") {
-          // Improved cron expression parsing using shared utility
-          try {
-            shouldRun = matchesCronExpression(task.cronExpression, now);
-          } catch (error) {
-            console.error(
-              `[${new Date().toISOString()}] Error parsing cron expression ${task.cronExpression}:`,
-              error,
-            );
-            addLog({
-              time: currentTime,
-              message: `=== 解析定时任务 ${task.name} 的Cron表达式失败: ${error.message} ===`,
-              type: "error",
-            });
-            return;
-          }
-        }
-
-        if (shouldRun) {
-          // Check if the task was already executed in the last minute to avoid duplicate execution
-          const taskExecutionKey = `${task.id}_${now.getDate()}_${now.getHours()}_${now.getMinutes()}`;
-          const lastExecutionKey = localStorage.getItem(
-            `lastTaskExecution_${task.id}`,
-          );
-
-          if (lastExecutionKey !== taskExecutionKey) {
-            // Update last execution time
-            localStorage.setItem(
-              `lastTaskExecution_${task.id}`,
-              taskExecutionKey,
-            );
-
-            // Execute the task
-            lastTaskExecution = Date.now();
-            executeScheduledTask(task);
-          } else {
-            // Only log once per minute to avoid spamming logs
-            // But since we check every 10s, this might log multiple times if we don't track logged state
-            // For now, we can skip logging "already executed" to keep logs clean
-          }
-        }
-      });
-    } catch (error) {
-      console.error(
-        `[${new Date().toISOString()}] Error in task scheduler:`,
-        error,
+      nasTokenIdMap.value = result.tokenIdMap || {};
+      localStorage.setItem(
+        "xyzw_nas_token_id_map",
+        JSON.stringify(nasTokenIdMap.value),
       );
-      addLog({
-        time: new Date().toLocaleTimeString(),
-        message: `=== 定时任务调度服务发生错误: ${error.message} ===`,
-        type: "error",
-      });
+      serverAccounts.value = result.accounts || [];
+      if (!quiet) {
+        if (result.failed) {
+          message.warning(
+            `账号同步完成：新增 ${result.created}，更新 ${result.updated}，失败 ${result.failed}`,
+          );
+        } else {
+          message.success(
+            `NAS 账号已同步：新增 ${result.created}，更新 ${result.updated}`,
+          );
+        }
+      }
+      return result;
+    } catch (error) {
+      if (!quiet) message.error(`同步 NAS 账号失败：${error.message}`);
+      throw error;
+    } finally {
+      syncingNasAccounts.value = false;
+      accountSyncPromise = null;
     }
-  }, 10000); // Check every 10 seconds
+  })();
+  return accountSyncPromise;
+};
+
+const openServerAccounts = async () => {
+  showServerAccountsModal.value = true;
+  try {
+    await loadServerAccounts();
+  } catch {
+    // Error has already been shown.
+  }
+};
+
+const toggleServerAccount = async (account, enabled) => {
+  try {
+    await requestBatchServer(`/api/tokens/${encodeURIComponent(account.id)}`, {
+      method: "PATCH",
+      body: { enabled: Boolean(enabled) },
+    });
+    await loadServerAccounts({ quiet: true });
+  } catch (error) {
+    message.error(`更新 NAS 账号失败：${error.message}`);
+  }
+};
+
+const deleteServerAccount = (account) => {
+  dialog.warning({
+    title: "删除 NAS 账号",
+    content: `确定从 NAS 删除“${account.name}”吗？对应本机缓存也会移除。`,
+    positiveText: "删除",
+    negativeText: "取消",
+    onPositiveClick: async () => {
+      try {
+        await requestBatchServer(
+          `/api/tokens/${encodeURIComponent(account.id)}`,
+          { method: "DELETE" },
+        );
+        const localToken = tokenStore.gameTokens.find(
+          (token) =>
+            String(scheduleTokenValue(token)) === String(account.id) ||
+            (account.roleId != null &&
+              String(token.roleId) === String(account.roleId)),
+        );
+        if (localToken) {
+          await tokenStore.removeToken(localToken.id);
+          localStorage.removeItem(`daily-settings:${localToken.id}`);
+          delete nasTokenIdMap.value[localToken.id];
+          localStorage.setItem(
+            "xyzw_nas_token_id_map",
+            JSON.stringify(nasTokenIdMap.value),
+          );
+        }
+        await loadServerAccounts({ quiet: true });
+        await loadScheduledTasks();
+        message.success("NAS 账号已删除");
+      } catch (error) {
+        message.error(`删除 NAS 账号失败：${error.message}`);
+      }
+    },
+  });
 };
 
 // Token刷新等待处理函数
@@ -4617,15 +4858,45 @@ const handleTokenRefreshWaiting = (data) => {
   });
 };
 
+const handleManualLeaseLost = (event) => {
+  shouldStop.value = true;
+  for (const tokenId of selectedTokens.value) {
+    tokenStore.closeWebSocketConnection(tokenId);
+  }
+  addLog({
+    time: new Date().toLocaleTimeString(),
+    message: `NAS 手动执行租约已失效，正在停止手动任务：${event.detail?.error || "未知原因"}`,
+    type: "error",
+  });
+  message.error("NAS 手动执行租约已失效，手动任务已停止");
+};
+
 // Debug: Log initial state when component mounts
 onMounted(() => {
-  // Start the task scheduler after all functions are initialized
-  scheduleTaskExecution();
-  // Start countdown timer
+  startBrowserLogPersistence();
   startCountdown();
   loadTaskTemplates();
-  // 监听Token刷新等待事件
   $emit.on("token:refresh:waiting", handleTokenRefreshWaiting);
+  window.addEventListener("xyzw:manual-lease-lost", handleManualLeaseLost);
+  (async () => {
+    await syncAccountsToNas({ quiet: true });
+    await loadBatchSettings({ fromServer: true });
+    const migrated = await migrateLegacyScheduledTasks();
+    await loadScheduledTasks();
+    if (migrated.failed) {
+      message.warning(
+        `浏览器定时任务迁移完成：新增 ${migrated.imported}，跳过 ${migrated.skipped}，失败 ${migrated.failed}`,
+      );
+    } else if (migrated.imported) {
+      message.success(`已迁移 ${migrated.imported} 个浏览器定时任务到 NAS`);
+    }
+  })().catch((error) => {
+    console.warn("初始化 NAS 批量任务状态失败:", error.message);
+    message.error(`初始化 NAS 定时任务失败：${error.message}`);
+  });
+  nextRunRefreshTimer = setInterval(() => {
+    loadScheduledTasks().catch(() => {});
+  }, 60_000);
 });
 
 // Cleanup countdown interval on unmount
@@ -4637,344 +4908,18 @@ onBeforeUnmount(() => {
 
   // 移除Token刷新等待事件监听
   $emit.off("token:refresh:waiting", handleTokenRefreshWaiting);
-
-  // Cleanup task scheduler intervals
-  if (intervalId.value) {
-    clearInterval(intervalId.value);
-    intervalId.value = null;
-    addLog({
-      time: new Date().toLocaleTimeString(),
-      message: "=== 定时任务调度服务已停止 ===",
-      type: "info",
-    });
+  window.removeEventListener("xyzw:manual-lease-lost", handleManualLeaseLost);
+  if (nextRunRefreshTimer) clearInterval(nextRunRefreshTimer);
+  nextRunRefreshTimer = null;
+  if (cronPreviewTimer) clearTimeout(cronPreviewTimer);
+  if (supplementalSettingsSaveTimer) {
+    clearTimeout(supplementalSettingsSaveTimer);
   }
-
-  if (healthCheckInterval) {
-    clearInterval(healthCheckInterval);
-    healthCheckInterval = null;
-  }
+  if (manualLeaseReleaseTimer) clearTimeout(manualLeaseReleaseTimer);
+  clearBrowserLogContext();
+  releaseManualLease();
+  stopBrowserLogPersistence();
 });
-
-// Task scheduler - ensure it runs properly
-const scheduleTaskExecution = () => {
-  // Log the start of the scheduler
-  addLog({
-    time: new Date().toLocaleTimeString(),
-    message: "=== 定时任务调度服务已启动 ===",
-    type: "info",
-  });
-
-  // Start the scheduler
-  startScheduler();
-
-  // Health check every 5 minutes instead of 1 hour for more frequent safety checks
-  if (healthCheckInterval) {
-    clearInterval(healthCheckInterval);
-  }
-  healthCheckInterval = setInterval(healthCheck, 5 * 60 * 1000);
-
-  // Initial health check
-  healthCheck();
-};
-
-/** Resolve a configured task without evaluating user-controlled source code.
- * @param {string} taskName Stored task identifier.
- * @returns {Function|undefined} The registered task, or undefined for unknown names.
- */
-function getScheduledTask(taskName) {
-  const tasks = {
-    startBatch,
-    claimHangUpRewards,
-    batchAddHangUpTime,
-    resetBottles,
-    batchlingguanzi,
-    climbTower,
-    climbWeirdTower,
-    batchStudy,
-    batchOpenBox,
-    batchOpenBoxByPoints,
-    batchClaimBoxPointReward,
-    batchFish,
-    batchRecruit,
-    batchRedeemCodes,
-    batchbaoku13,
-    batchbaoku45,
-    batchmengjing,
-    batchclubsign,
-    batchCampChallenge,
-    batchCampChallengePet,
-    batchCampClaimTasks,
-    batchApplyLegion,
-    batcharenafight,
-    batchTopUpFish,
-    batchTopUpArena,
-    batchClaimFreeEnergy,
-    skinChallenge,
-    legion_storebuygoods,
-    store_syncpurchaseconfig,
-    store_purchase,
-    collection_claimfreereward,
-    batchLegacyClaim,
-    batchLegacyGiftSendEnhanced,
-    batchUseItems,
-    batchMergeItems,
-    batchClaimPeachTasks,
-    batchGenieSweep,
-    batchBuyDreamItems,
-    batchXuanwuBlessing,
-  };
-  return Object.hasOwn(tasks, taskName) ? tasks[taskName] : undefined;
-}
-
-// Verify task dependencies - 只验证基础依赖，WebSocket连接由具体任务函数处理
-const verifyTaskDependencies = async (task) => {
-  addLog({
-    time: new Date().toLocaleTimeString(),
-    message: `=== 开始验证定时任务 ${task.name} 的依赖 ===`,
-    type: "info",
-  });
-
-  // Verify localStorage is available
-  try {
-    localStorage.setItem("test", "test");
-    localStorage.removeItem("test");
-    addLog({
-      time: new Date().toLocaleTimeString(),
-      message: "✅ localStorage可用",
-      type: "info",
-    });
-  } catch (error) {
-    addLog({
-      time: new Date().toLocaleTimeString(),
-      message: `❌ localStorage不可用: ${error.message}`,
-      type: "error",
-    });
-    return false;
-  }
-
-  // Verify token store is available
-  if (!tokenStore || !tokenStore.gameTokens) {
-    addLog({
-      time: new Date().toLocaleTimeString(),
-      message: "❌ Token存储不可用",
-      type: "error",
-    });
-    return false;
-  }
-
-  // Verify task functions exist
-  for (const taskName of task.selectedTasks) {
-    const taskFunction = getScheduledTask(taskName);
-    if (typeof taskFunction !== "function") {
-      addLog({
-        time: new Date().toLocaleTimeString(),
-        message: `❌ 任务函数不存在: ${taskName}`,
-        type: "error",
-      });
-      return false;
-    }
-  }
-
-  if (
-    task.selectedTasks.includes("batchApplyLegion") &&
-    !Number(task.legionApplyTargetId)
-  ) {
-    addLog({
-      time: new Date().toLocaleTimeString(),
-      message: `=== 定时任务 ${task.name} 缺少目标俱乐部ID ===`,
-      type: "error",
-    });
-    return false;
-  }
-
-  // 直接使用所有选中的token，WebSocket连接由具体任务函数内部管理
-  // ensureConnection函数会自动处理并行连接和连接池管理
-  const connectedTokens = task.selectedTokens.map((tokenId) => {
-    const tokenName =
-      tokenStore.gameTokens.find((t) => t.id === tokenId)?.name || tokenId;
-    return { id: tokenId, name: tokenName };
-  });
-
-  // Log connection status
-  addLog({
-    time: new Date().toLocaleTimeString(),
-    message: `✅ 将使用 ${connectedTokens.length} 个账号执行任务`,
-    type: "info",
-  });
-
-  // Store connected tokens for execution
-  task.connectedTokens = connectedTokens.map((t) => t.id);
-
-  addLog({
-    time: new Date().toLocaleTimeString(),
-    message: `=== 定时任务 ${task.name} 的依赖验证通过，将执行 ${connectedTokens.length} 个账号 ===`,
-    type: "success",
-  });
-  return true;
-};
-
-// Execute a scheduled task with dependency verification
-const executeScheduledTask = async (task) => {
-  addLog({
-    time: new Date().toLocaleTimeString(),
-    message: `=== 开始执行定时任务: ${task.name} ===`,
-    type: "info",
-  });
-
-  try {
-    // Verify dependencies before executing task
-    const dependenciesValid = await verifyTaskDependencies(task);
-    if (!dependenciesValid) {
-      addLog({
-        time: new Date().toLocaleTimeString(),
-        message: `=== 定时任务 ${task.name} 依赖验证失败，取消执行 ===`,
-        type: "error",
-      });
-      return;
-    }
-
-    // Filter out tokens that don't exist in current tokens.value
-    const availableTokens = (
-      task.connectedTokens || task.selectedTokens
-    ).filter((tokenId) => {
-      return tokens.value.some((t) => t.id === tokenId);
-    });
-
-    const missingTokens = (task.connectedTokens || task.selectedTokens).filter(
-      (tokenId) => {
-        return !tokens.value.some((t) => t.id === tokenId);
-      },
-    );
-
-    if (missingTokens.length > 0) {
-      addLog({
-        time: new Date().toLocaleTimeString(),
-        message: `⚠️  跳过不存在的Token: ${missingTokens.join(", ")}`,
-        type: "warning",
-      });
-    }
-
-    if (availableTokens.length === 0) {
-      addLog({
-        time: new Date().toLocaleTimeString(),
-        message: `=== 定时任务 ${task.name} 没有可用的Token，取消执行 ===`,
-        type: "error",
-      });
-      return;
-    }
-
-    // Always use the latest selectedTokens from the task that exist in current tokens.value
-    selectedTokens.value = [...availableTokens];
-
-    // Task types share account connections and run state; account-level concurrency stays inside each task.
-    for (const taskName of task.selectedTasks) {
-      if (shouldStop.value) break;
-
-      if (
-        ["batchbaoku45", "batchbaoku13"].includes(taskName) &&
-        !isbaokuActivityOpen.value
-      ) {
-        addLog({
-          time: new Date().toLocaleTimeString(),
-          message: `跳过任务: ${availableTasks.find((t) => t.value === taskName)?.label || taskName} (不在宝库开放时间)`,
-          type: "warning",
-        });
-        continue;
-      }
-
-      if (
-        ["batchmengjing", "batchBuyDreamItems"].includes(taskName) &&
-        !ismengjingActivityOpen.value
-      ) {
-        addLog({
-          time: new Date().toLocaleTimeString(),
-          message: `跳过任务: ${availableTasks.find((t) => t.value === taskName)?.label || taskName} (不在梦境开放时间)`,
-          type: "warning",
-        });
-        continue;
-      }
-
-      if (
-        ["batchTopUpArena", "batcharenafight"].includes(taskName) &&
-        !isarenaActivityOpen.value
-      ) {
-        addLog({
-          time: new Date().toLocaleTimeString(),
-          message: `跳过任务: ${availableTasks.find((t) => t.value === taskName)?.label || taskName} (不在竞技场开放时间)`,
-          type: "warning",
-        });
-        continue;
-      }
-
-      if (
-        [
-          "climbWeirdTower",
-          "batchUseItems",
-          "batchMergeItems",
-          "batchClaimFreeEnergy",
-        ].includes(taskName) &&
-        !isWeirdTowerActivityOpen.value
-      ) {
-        addLog({
-          time: new Date().toLocaleTimeString(),
-          message: `跳过任务: ${availableTasks.find((t) => t.value === taskName)?.label || taskName} (不在怪异塔开放时间)`,
-          type: "warning",
-        });
-        continue;
-      }
-
-      addLog({
-        time: new Date().toLocaleTimeString(),
-        message: `执行任务: ${availableTasks.find((t) => t.value === taskName)?.label || taskName}`,
-        type: "info",
-      });
-
-      // Call the task function dynamically
-      const taskFunction = getScheduledTask(taskName);
-      if (typeof taskFunction === "function") {
-        // For batch operations, pass isScheduledTask = true
-        // 具体的batch任务函数内部会使用ensureConnection管理并行连接
-        if (
-          [
-            "batchOpenBox",
-            "batchOpenBoxByPoints",
-            "batchFish",
-            "batchRecruit",
-            "batchLegacyGiftSendEnhanced",
-          ].includes(taskName)
-        ) {
-          await taskFunction(true);
-        } else if (taskName === "batchApplyLegion") {
-          await taskFunction(task.legionApplyTargetId);
-        } else {
-          await taskFunction();
-        }
-      } else {
-        addLog({
-          time: new Date().toLocaleTimeString(),
-          message: `任务函数不存在: ${taskName}`,
-          type: "error",
-        });
-      }
-    }
-
-    addLog({
-      time: new Date().toLocaleTimeString(),
-      message: `=== 定时任务执行完成: ${task.name} ===`,
-      type: "success",
-    });
-  } catch (error) {
-    addLog({
-      time: new Date().toLocaleTimeString(),
-      message: `=== 定时任务执行失败: ${error.message} ===`,
-      type: "error",
-    });
-    console.error(
-      `[${new Date().toISOString()}] Error executing scheduled task ${task.name}:`,
-      error,
-    );
-  }
-};
 
 // 注: boxTypeOptions, fishTypeOptions 已从 @/utils/batch 导入
 
@@ -5025,6 +4970,7 @@ const queryRecipientInfo = async () => {
 
   // 3. 初始化状态
   isQueryingRecipient.value = true;
+  let ownsSlot = false;
   recipientIdError.value = "";
   recipientInfo.value = null;
   // 重置头像状态
@@ -5049,7 +4995,9 @@ const queryRecipientInfo = async () => {
     });
 
     // 使用现有的ensureConnection函数，它已经包含了重连机制
-    await ensureConnection(firstTokenId);
+    await ensureConnection(firstTokenId, 2, (owned) => {
+      ownsSlot = owned;
+    });
 
     addLog({
       time: new Date().toLocaleTimeString(),
@@ -5169,6 +5117,9 @@ const queryRecipientInfo = async () => {
     message.error(errorMsg);
   } finally {
     isQueryingRecipient.value = false;
+    tokenStore.closeWebSocketConnection(firstTokenId);
+    if (ownsSlot) releaseConnectionSlot();
+    await releaseManualLease();
 
     // 记录查询完成
     addLog({
@@ -5225,10 +5176,11 @@ const openRedeemCodeModal = () => {
   showRedeemCodeModal.value = true;
 };
 
-const saveRedeemCodeConfig = () => {
+const saveRedeemCodeConfig = async () => {
   batchSettings.cdkCodes = batchSettings.cdkCodes || "";
   batchSettings.cdkPlatformType = batchSettings.cdkPlatformType || "h5";
   localStorage.setItem("batchSettings", JSON.stringify(batchSettings));
+  await saveServerBatchSettings(serverBatchSettingsPayload());
   message.success("兑换码配置已保存");
 };
 
@@ -5238,7 +5190,7 @@ const executeRedeemCodes = async () => {
     return;
   }
 
-  saveRedeemCodeConfig();
+  await saveRedeemCodeConfig();
   showRedeemCodeModal.value = false;
   await batchRedeemCodes();
 };
@@ -5280,7 +5232,7 @@ const resetBlackMarketPurchaseList = () => {
   blackMarketPurchaseList.value = createDefaultBlackMarketPurchaseList();
 };
 
-const saveBlackMarketPurchaseConfig = () => {
+const saveBlackMarketPurchaseConfig = async () => {
   const normalized = normalizeBlackMarketPurchaseList(
     blackMarketPurchaseList.value,
   );
@@ -5291,7 +5243,7 @@ const saveBlackMarketPurchaseConfig = () => {
   }
 
   batchSettings.blackMarketPurchaseList = normalized;
-  saveBatchSettings();
+  await saveBatchSettings();
 
   showBlackMarketPurchaseModal.value = false;
   message.success("黑市采购清单已保存");
@@ -5313,10 +5265,10 @@ const toggleDreamItem = (itemKey, checked) => {
   }
 };
 
-const saveDreamBuyConfig = () => {
+const saveDreamBuyConfig = async () => {
   // Save settings
   batchSettings.dreamPurchaseList = [...dreamBuyList.value];
-  saveBatchSettings();
+  await saveBatchSettings();
 
   showDreamBuyModal.value = false;
   message.success("梦境购买配置已保存");
@@ -5377,22 +5329,66 @@ const loadSettings = (tokenId) => {
   }
 };
 
-const openSettings = (token) => {
+const openSettings = async (token) => {
   currentSettingsTokenId.value = token.id;
   currentSettingsTokenName.value = token.name;
+  try {
+    await syncAccountsToNas({ quiet: true });
+    const serverId = scheduleTokenValue(token);
+    const account = serverAccounts.value.find(
+      (item) => String(item.id) === String(serverId),
+    );
+    const settings = normalizeTaskSettingsValue(account?.daily_settings);
+    if (settings) {
+      localStorage.setItem(
+        `daily-settings:${token.id}`,
+        JSON.stringify(settings),
+      );
+    }
+  } catch {
+    // Keep the local mirror when NAS is temporarily unavailable.
+  }
   const saved = loadSettings(token.id);
   Object.assign(currentSettings, saved);
   showSettingsModal.value = true;
 };
 
-const saveSettings = () => {
+const normalizeTaskSettingsValue = (value) => {
+  if (value && typeof value === "object" && !Array.isArray(value)) return value;
+  if (typeof value !== "string" || !value.trim()) return null;
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed
+      : null;
+  } catch {
+    return null;
+  }
+};
+
+const saveSettings = async () => {
   if (currentSettingsTokenId.value) {
-    localStorage.setItem(
-      `daily-settings:${currentSettingsTokenId.value}`,
-      JSON.stringify(currentSettings),
-    );
-    message.success(`已保存 ${currentSettingsTokenName.value} 的设置`);
-    showSettingsModal.value = false;
+    try {
+      await syncAccountsToNas({ quiet: true });
+      const token = tokenStore.gameTokens.find(
+        (item) => item.id === currentSettingsTokenId.value,
+      );
+      const serverId = token ? scheduleTokenValue(token) : null;
+      if (!serverId) throw new Error("没有找到对应的 NAS 账号");
+      const settings = { ...currentSettings };
+      await requestBatchServer(`/api/tokens/${encodeURIComponent(serverId)}`, {
+        method: "PATCH",
+        body: { daily_settings: settings },
+      });
+      localStorage.setItem(
+        `daily-settings:${currentSettingsTokenId.value}`,
+        JSON.stringify(settings),
+      );
+      message.success(`已保存 ${currentSettingsTokenName.value} 的设置`);
+      showSettingsModal.value = false;
+    } catch (error) {
+      message.error(`保存账号设置失败：${error.message}`);
+    }
   }
 };
 
@@ -5422,7 +5418,7 @@ const handleSelectAllForApply = (checked) => {
   }
 };
 
-const applyTemplate = () => {
+const applyTemplate = async () => {
   if (!selectedTemplateId.value || selectedTokensForApply.value.length === 0) {
     message.error("请选择模板和要应用的账号");
     return;
@@ -5436,22 +5432,42 @@ const applyTemplate = () => {
     return;
   }
 
-  // 应用模板到选中的账号
+  await syncAccountsToNas({ quiet: true });
   let successCount = 0;
-  selectedTokensForApply.value.forEach((tokenId) => {
-    // 保存账号设置时同时保存模板ID
-    const accountSettings = {
-      ...template.settings,
-      templateId: template.id, // 记录模板ID
-    };
-    localStorage.setItem(
-      `daily-settings:${tokenId}`,
-      JSON.stringify(accountSettings),
-    );
-    successCount++;
-  });
+  let failedCount = 0;
+  for (const tokenId of selectedTokensForApply.value) {
+    try {
+      const token = tokenStore.gameTokens.find((item) => item.id === tokenId);
+      const serverId = token ? scheduleTokenValue(token) : null;
+      if (!serverId) throw new Error("账号未同步到 NAS");
+      const accountSettings = {
+        ...template.settings,
+        templateId: template.id,
+      };
+      await requestBatchServer(
+        `/api/tokens/${encodeURIComponent(serverId)}`,
+        {
+          method: "PATCH",
+          body: { daily_settings: accountSettings },
+        },
+      );
+      localStorage.setItem(
+        `daily-settings:${tokenId}`,
+        JSON.stringify(accountSettings),
+      );
+      successCount++;
+    } catch {
+      failedCount++;
+    }
+  }
 
-  message.success(`已成功应用模板到 ${successCount} 个账号`);
+  if (failedCount) {
+    message.warning(
+      `模板已应用 ${successCount} 个账号，${failedCount} 个失败`,
+    );
+  } else {
+    message.success(`已成功应用模板到 ${successCount} 个账号`);
+  }
   showApplyTemplateModal.value = false;
 };
 
@@ -5645,18 +5661,50 @@ const saveTaskTemplate = () => {
 const currentRunningTokenId = ref(null);
 const currentProgress = ref(0);
 const logs = ref([]);
+const serverLogs = ref([]);
+const serverLogsLoading = ref(false);
+const logSource = ref("local");
 const logContainer = ref(null);
 const autoScrollLog = ref(true);
 const filterErrorsOnly = ref(false);
+
+const normalizedServerLogs = computed(() =>
+  serverLogs.value.map((entry) => {
+    const taskName =
+      scheduledTasks.value.find((task) => task.id === entry.task_id)?.name ||
+      entry.task_type ||
+      "NAS 任务";
+    const status = String(entry.level || entry.status || "info");
+    return {
+      time: new Date(entry.created_at).toLocaleTimeString("zh-CN", {
+        hour12: false,
+      }),
+      type:
+        status === "error"
+          ? "error"
+          : status === "success"
+            ? "success"
+            : status === "warning" || status === "warn"
+              ? "warning"
+              : "info",
+      message: `[${taskName}]${entry.token_name ? `[${entry.token_name}]` : ""} ${entry.message || ""}`,
+    };
+  }),
+);
+
+const displayLogs = computed(() =>
+  logSource.value === "server" ? normalizedServerLogs.value : logs.value,
+);
+
 const errorCount = computed(() => {
-  return logs.value.filter((log) => log.type === "error").length;
+  return displayLogs.value.filter((log) => log.type === "error").length;
 });
 
 const filteredLogs = computed(() => {
   if (filterErrorsOnly.value) {
-    return logs.value.filter((log) => log.type === "error");
+    return displayLogs.value.filter((log) => log.type === "error");
   }
-  return logs.value;
+  return displayLogs.value;
 });
 
 const currentRunningTokenName = computed(() => {
@@ -5871,6 +5919,7 @@ const getValidGroupTokenIds = (groupId) => {
 const addLog = (log) => {
   // 添加日志数据到数组
   logs.value.push(log);
+  queueBrowserLog(log);
 
   // 限制logs数组大小，防止内存占用过大
   const maxLogEntries = batchSettings.maxLogEntries || 1000;
@@ -5916,11 +5965,11 @@ watch(autoScrollLog, (newValue) => {
 });
 
 const copyLogs = () => {
-  if (logs.value.length === 0) {
+  if (displayLogs.value.length === 0) {
     message.warning("没有可复制的日志");
     return;
   }
-  const logText = logs.value
+  const logText = displayLogs.value
     .map((log) => `${log.time} ${log.message}`)
     .join("\n");
   navigator.clipboard
@@ -5934,9 +5983,32 @@ const copyLogs = () => {
 };
 
 const clearLogs = () => {
-  logs.value = [];
+  if (logSource.value === "server") serverLogs.value = [];
+  else logs.value = [];
   message.success("日志已清空");
 };
+
+const loadServerLogs = async () => {
+  serverLogsLoading.value = true;
+  try {
+    serverLogs.value = await loadServerTaskLogs({
+      limit: filterErrorsOnly.value ? 5000 : 300,
+      status: filterErrorsOnly.value ? "error" : null,
+    });
+  } catch (error) {
+    message.error(`读取 NAS 日志失败：${error.message}`);
+  } finally {
+    serverLogsLoading.value = false;
+  }
+};
+
+watch(logSource, (source) => {
+  if (source === "server") loadServerLogs();
+});
+
+watch(filterErrorsOnly, () => {
+  if (logSource.value === "server") loadServerLogs();
+});
 
 const waitForConnection = async (
   tokenId,
@@ -5989,6 +6061,19 @@ const ensureConnection = async (
   if (!latestToken) {
     throw new Error(`Token not found: ${tokenId}`);
   }
+
+  const leaseTokenIds = (selectedTokens.value.length
+    ? selectedTokens.value
+    : [tokenId]
+  )
+    .map((id) => {
+      const token = tokens.value.find((item) => item.id === id);
+      return token ? scheduleTokenValue(token) : id;
+    })
+    .filter(Boolean);
+  await ensureManualLease(leaseTokenIds).catch((error) => {
+    throw new Error(`获取 NAS 手动执行租约失败：${error.message}`);
+  });
 
   const status = tokenStore.getWebSocketStatus(tokenId);
   let connected = status === "connected";
@@ -6081,6 +6166,15 @@ const ensureConnection = async (
 
   return true;
 };
+
+let manualLeaseReleaseTimer = null;
+watch(isRunning, (running, previous) => {
+  if (manualLeaseReleaseTimer) clearTimeout(manualLeaseReleaseTimer);
+  if (!previous || running) return;
+  manualLeaseReleaseTimer = setTimeout(() => {
+    if (!isRunning.value) releaseManualLease();
+  }, 1500);
+});
 
 const createTaskDeps = () => ({
   selectedTokens,
@@ -6245,6 +6339,11 @@ const startBatch = async () => {
 
   isRunning.value = true;
   shouldStop.value = false;
+  setBrowserLogContext({
+    runId: `browser_${Date.now()}`,
+    taskType: "startBatch",
+    source: "browser-manual",
+  });
 
   // Reset status
   selectedTokens.value.forEach((id) => {
@@ -6338,6 +6437,8 @@ const startBatch = async () => {
   )
     message.warning("本轮结束，仍有未完成任务，可再次开始继续");
   else message.success("批量任务执行结束");
+  clearBrowserLogContext();
+  flushBrowserLogs().catch(() => {});
 };
 
 const stopBatch = () => {

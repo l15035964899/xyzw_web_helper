@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
@@ -11,6 +12,11 @@ import express from "express";
 import cron from "node-cron";
 import { createApiKeyMiddleware } from "./lib/apiKeyAuth.js";
 import { createAppAuthMiddleware } from "./lib/appAuth.js";
+import { applyBatchSettingsToTask } from "./lib/batchSettings.js";
+import {
+  getNextCronRun,
+  previewCronExpression,
+} from "./lib/cronSchedule.js";
 import { createDataStore } from "./lib/dataStore.js";
 import { GameClient } from "./lib/gameClient.js";
 import {
@@ -20,7 +26,12 @@ import {
   runXuanwuBlessing,
 } from "./lib/gameTasks.js";
 import { createLoginProxyMiddleware } from "./lib/loginProxy.js";
+import {
+  normalizeClientTaskLog,
+  sanitizeLogMessage,
+} from "./lib/logSanitizer.js";
 import { getMaintenanceDelay } from "./lib/maintenanceWindow.js";
+import { ManualLeaseManager } from "./lib/manualLeaseManager.js";
 import { createNativeTaskDefinitions } from "./lib/nativeBatchTasks.js";
 import {
   shouldRetryTokenAttempt,
@@ -48,6 +59,7 @@ function shanghaiDateKey(date = new Date()) {
 }
 
 const app = express();
+const REDACTED_SECRET = "[REDACTED]";
 app.use(createLoginProxyMiddleware());
 if (process.env.CORS_ORIGIN) {
   app.use(
@@ -194,6 +206,17 @@ const TASK_DEFINITIONS = {
   ...createNativeTaskDefinitions(),
 };
 
+function redactTaskSecret(task) {
+  if (!task?.options?.securityPassword) return task;
+  return {
+    ...task,
+    options: {
+      ...task.options,
+      securityPassword: REDACTED_SECRET,
+    },
+  };
+}
+
 // ==================== 日志存储 ====================
 const LOG_MAX = 500;
 const logs = [];
@@ -228,8 +251,9 @@ async function loadTokens() {
 // ==================== 任务执行引擎 ====================
 const runningTasks = new Set();
 const tokenLockQueue = new TokenLockQueue();
+const manualLeaseManager = new ManualLeaseManager({ lockQueue: tokenLockQueue });
 
-async function executeTask(task) {
+async function executeTask(task, { source = "nas" } = {}) {
   if (!task?.id) throw new Error("任务缺少 id");
   if (runningTasks.has(task.id)) {
     addLog("WARN", "task", `任务正在执行，跳过重复调用: ${task.name}`, {
@@ -239,15 +263,20 @@ async function executeTask(task) {
   }
 
   runningTasks.add(task.id);
+  const runId = randomUUID();
   try {
-    await executeTaskUnlocked(task);
+    await executeTaskUnlocked(task, runId, { source });
     return true;
   } finally {
     runningTasks.delete(task.id);
   }
 }
 
-async function executeTaskUnlocked(task) {
+async function executeTaskUnlocked(task, runId, { source = "nas" } = {}) {
+  task = applyBatchSettingsToTask(
+    task,
+    await dataStore.getBatchSettings(),
+  );
   addLog("INFO", "task", `开始执行任务: ${task.name}`, { taskId: task.id });
 
   // 兼容旧字段 token_ids 和新字段 selected_tokens
@@ -306,6 +335,14 @@ async function executeTaskUnlocked(task) {
   addLog("INFO", "task", `将执行于 ${targetTokens.length} 个角色`, {
     taskId: task.id,
   });
+  await logToDb(
+    task.id,
+    null,
+    "taskStarted",
+    "info",
+    `开始执行 ${task.name}，共 ${targetTokens.length} 个账号`,
+    { runId, source },
+  );
 
   let taskHadErrors = false;
   let queued = false;
@@ -391,7 +428,11 @@ async function executeTaskUnlocked(task) {
               `[${token.name}] ${logMessage}`,
               { taskId: task.id },
             );
-            await logToDb(task.id, token.name, result.cmd, status, logMessage);
+            await logToDb(task.id, token.name, result.cmd, status, logMessage, {
+              runId,
+              tokenId: token.id,
+              source,
+            });
           }
         } catch (error) {
           hadErrors = true;
@@ -404,7 +445,11 @@ async function executeTaskUnlocked(task) {
           addLog("ERROR", "task", `[${token.name}] ${logMessage}`, {
             taskId: task.id,
           });
-          await logToDb(task.id, token.name, key, "error", logMessage);
+          await logToDb(task.id, token.name, key, "error", logMessage, {
+            runId,
+            tokenId: token.id,
+            source,
+          });
           failureLogged = true;
           if (!client.connected) break;
         }
@@ -427,6 +472,7 @@ async function executeTaskUnlocked(task) {
           taskKeys.join(","),
           "error",
           logMessage,
+          { runId, tokenId: token.id, source },
         );
       }
     } finally {
@@ -459,7 +505,10 @@ async function executeTaskUnlocked(task) {
         `首轮执行结束，${retryTokens.length} 个账号将在 ` +
         `${Math.round(delay / 1000)} 秒后进行第 ${retryNumber} 次重试`;
       addLog("WARN", "task", retryMessage, { taskId: task.id });
-      await logToDb(task.id, null, "accountRetry", "info", retryMessage);
+      await logToDb(task.id, null, "accountRetry", "info", retryMessage, {
+        runId,
+        source,
+      });
       await sleep(delay);
 
       const nextRetryTokens = [];
@@ -506,20 +555,32 @@ async function executeTaskUnlocked(task) {
       "taskCompleted",
       taskHadErrors ? "error" : "success",
       completionMessage,
+      { runId, source },
     );
   } finally {
     taskLease.release();
   }
 }
 
-async function logToDb(taskId, tokenName, taskType, status, message) {
+async function logToDb(
+  taskId,
+  tokenName,
+  taskType,
+  status,
+  message,
+  { runId = null, tokenId = null, source = "nas" } = {},
+) {
   try {
     await dataStore.appendTaskLog({
+      run_id: runId,
       task_id: taskId,
+      token_id: tokenId,
       token_name: tokenName,
       task_type: taskType,
-      status,
-      message: message || null,
+      status: status || "info",
+      level: status || "info",
+      source,
+      message: sanitizeLogMessage(message || ""),
     });
   } catch (e) {
     console.error("写入日志失败:", e.message);
@@ -609,7 +670,7 @@ function registerCron(task) {
               { taskId: task.id },
             );
           }
-          await executeTask(runnableTask);
+          await executeTask(runnableTask, { source: "nas-cron" });
         } catch (err) {
           addLog("ERROR", "cron", `任务执行异常: ${task.name}`, {
             error: err.message,
@@ -695,6 +756,99 @@ app.use(
   ),
 );
 
+app.post("/api/cron/preview", (req, res) => {
+  const preview = previewCronExpression(req.body?.cron_expr || req.body?.cron, {
+    count: req.body?.count,
+  });
+  res.status(preview.valid ? 200 : 400).json(preview);
+});
+
+app.get("/api/batch-settings", async (req, res) => {
+  try {
+    const settings = await dataStore.getBatchSettings();
+    res.json({
+      ...settings,
+      _initialized: await dataStore.hasBatchSettings(),
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.patch("/api/batch-settings", async (req, res) => {
+  try {
+    res.json(await dataStore.updateBatchSettings(req.body));
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+app.get("/api/tasks/runtime", (req, res) => {
+  const lockHolders = tokenLockQueue.snapshot();
+  res.json({
+    runningTaskIds: [...runningTasks],
+    manualLeases: manualLeaseManager.list(),
+    accountLocks: Object.entries(lockHolders).map(([tokenId, holder]) => ({
+      token_id: tokenId,
+      holder,
+    })),
+  });
+});
+
+app.get("/api/manual-leases", (req, res) => {
+  res.json(manualLeaseManager.list());
+});
+
+app.post("/api/manual-leases", async (req, res) => {
+  try {
+    const tokenIds = [...new Set((req.body?.token_ids || []).map(String))];
+    const accounts = await dataStore.listTokens({ enabledOnly: true });
+    const allowed = new Set(accounts.map((account) => String(account.id)));
+    const missing = tokenIds.filter((tokenId) => !allowed.has(tokenId));
+    if (missing.length > 0) {
+      return res.status(400).json({
+        error: `账号不存在或已停用：${missing.join(", ")}`,
+      });
+    }
+    const lease = await manualLeaseManager.acquire(tokenIds, {
+      ttlMs: req.body?.ttl_ms || req.body?.ttlMs,
+      owner: req.body?.owner,
+    });
+    res.json(lease);
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+app.post("/api/manual-leases/:id/heartbeat", (req, res) => {
+  const lease = manualLeaseManager.heartbeat(req.params.id, {
+    ttlMs: req.body?.ttl_ms || req.body?.ttlMs,
+  });
+  if (!lease) return res.status(404).json({ error: "手动租约不存在或已过期" });
+  res.json(lease);
+});
+
+app.delete("/api/manual-leases/:id", (req, res) => {
+  const released = manualLeaseManager.release(req.params.id);
+  if (!released) return res.status(404).json({ error: "手动租约不存在" });
+  res.json({ ok: true });
+});
+
+app.post("/api/logs/db/batch", async (req, res) => {
+  try {
+    const logs = Array.isArray(req.body?.logs) ? req.body.logs : [];
+    if (logs.length === 0) return res.json({ accepted: 0, logs: [] });
+    if (logs.length > 500) {
+      return res.status(400).json({ error: "单次最多写入 500 条日志" });
+    }
+    const normalized = logs.map((entry) => normalizeClientTaskLog(entry));
+    const created = await dataStore.appendTaskLogs(normalized);
+    res.json({ accepted: created.length, logs: created });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
 app.get("/api/tokens", async (req, res) => {
   try {
     res.json(await dataStore.listTokens());
@@ -733,7 +887,19 @@ app.delete("/api/tokens/:id", async (req, res) => {
 
 app.get("/api/tasks", async (req, res) => {
   try {
-    res.json(await dataStore.listTasks());
+    const tasks = await dataStore.listTasks();
+    res.json(
+      tasks.map((task) => {
+        const next = task.enabled
+          ? getNextCronRun(task.cron_expr || task.cron_expression)
+          : null;
+        return {
+          ...redactTaskSecret(task),
+          next_run_at: next ? next.toISOString() : null,
+          running: runningTasks.has(task.id),
+        };
+      }),
+    );
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -743,12 +909,16 @@ app.post("/api/tasks", async (req, res) => {
   try {
     const cronExpr =
       req.body.cron_expr || req.body.cron_expression || req.body.cron;
-    if (!cron.validate(cronExpr)) {
-      return res.status(400).json({ error: "Cron 表达式无效" });
+    const preview = previewCronExpression(cronExpr);
+    if (!preview.valid) {
+      return res.status(400).json({ error: preview.message });
     }
-    const created = await dataStore.createTask(req.body);
+    const created = await dataStore.createTask({
+      ...req.body,
+      cron_expr: preview.normalized,
+    });
     registerCron(created);
-    res.json([created]);
+    res.json([redactTaskSecret(created)]);
   } catch (error) {
     res.status(400).json({ error: error.message });
   }
@@ -764,12 +934,27 @@ app.patch("/api/tasks/:id", async (req, res) => {
       req.body.cron ||
       current.cron_expr ||
       current.cron_expression;
-    if (!cron.validate(cronExpr)) {
-      return res.status(400).json({ error: "Cron 表达式无效" });
+    const preview = previewCronExpression(cronExpr);
+    if (!preview.valid) {
+      return res.status(400).json({ error: preview.message });
     }
-    const updated = await dataStore.updateTask(req.params.id, req.body);
+    const mergedOptions = {
+      ...(current.options || {}),
+      ...(req.body.options || {}),
+    };
+    if (
+      mergedOptions.securityPassword === REDACTED_SECRET &&
+      current.options?.securityPassword
+    ) {
+      mergedOptions.securityPassword = current.options.securityPassword;
+    }
+    const updated = await dataStore.updateTask(req.params.id, {
+      ...req.body,
+      cron_expr: preview.normalized,
+      options: mergedOptions,
+    });
     await registerAllCrons();
-    res.json([updated]);
+    res.json([redactTaskSecret(updated)]);
   } catch (error) {
     res.status(400).json({ error: error.message });
   }
@@ -791,7 +976,7 @@ app.post("/api/tasks/:id/run", async (req, res) => {
   if (runningTasks.has(task.id)) {
     return res.status(409).json({ error: "任务正在执行" });
   }
-  executeTask(task).catch((err) =>
+  executeTask(task, { source: "nas-manual" }).catch((err) =>
     addLog("ERROR", "api", `手动执行失败: ${err.message}`),
   );
   res.json({ status: "running", task: task.name });
@@ -813,7 +998,7 @@ app.post("/api/tasks/:id/run-once", async (req, res) => {
     return res.json({ status: "skipped", reason: "already_run_today" });
   }
 
-  executeTask(task).catch((err) =>
+  executeTask(task, { source: "nas-scheduler" }).catch((err) =>
     addLog("ERROR", "scheduler", `定时兜底执行失败: ${err.message}`, {
       taskId: task.id,
     }),
@@ -842,7 +1027,7 @@ app.post("/api/tasks/:id/run-if-due", async (req, res) => {
     return res.json({ status: "skipped", reason: "interval_not_elapsed" });
   }
 
-  executeTask(task).catch((err) =>
+  executeTask(task, { source: "nas-scheduler" }).catch((err) =>
     addLog("ERROR", "scheduler", `间隔任务兜底执行失败: ${err.message}`, {
       taskId: task.id,
     }),
@@ -861,8 +1046,16 @@ app.get("/api/logs/db", async (req, res) => {
     typeof req.query.status === "string" && req.query.status.trim()
       ? req.query.status.trim()
       : null;
+  const taskId =
+    typeof req.query.task_id === "string" && req.query.task_id.trim()
+      ? req.query.task_id.trim()
+      : null;
+  const runId =
+    typeof req.query.run_id === "string" && req.query.run_id.trim()
+      ? req.query.run_id.trim()
+      : null;
   try {
-    res.json(await dataStore.listTaskLogs(limit, { status }));
+    res.json(await dataStore.listTaskLogs(limit, { status, taskId, runId }));
   } catch (error) {
     res.status(500).json({ error: error.message });
   }

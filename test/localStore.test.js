@@ -11,6 +11,7 @@ test("local store persists tokens, tasks and task logs", async (t) => {
 
   const store = createLocalStore({ dataDir: directory });
   await store.init();
+  assert.equal(await store.hasBatchSettings(), false);
 
   const token = await store.createToken({
     name: "账号一",
@@ -72,8 +73,44 @@ test("local store persists tokens, tasks and task logs", async (t) => {
     ["失败"],
   );
 
+  await store.appendTaskLogs([
+    {
+      run_id: "run-a",
+      task_id: task.id,
+      task_type: "startBatch",
+      level: "info",
+      status: "info",
+      source: "browser-manual",
+      message: "浏览器日志一",
+    },
+    {
+      run_id: "run-a",
+      task_id: task.id,
+      task_type: "startBatch",
+      level: "info",
+      status: "info",
+      source: "browser-manual",
+      message: "浏览器日志二",
+    },
+  ]);
+  assert.deepEqual(
+    (await store.listTaskLogs(10, { runId: "run-a" })).map(
+      (entry) => entry.message,
+    ),
+    ["浏览器日志二", "浏览器日志一"],
+  );
+
+  const settings = await store.updateBatchSettings({
+    boxCount: 25,
+    receiverId: "99",
+  });
+  assert.equal(settings.boxCount, 25);
+  assert.equal(settings.receiverId, "99");
+  assert.equal(await store.hasBatchSettings(), true);
+
   const reloaded = createLocalStore({ dataDir: directory });
   await reloaded.init();
   assert.equal((await reloaded.listTokens())[0].id, token.id);
   assert.equal((await reloaded.listTasks())[0].id, task.id);
+  assert.equal((await reloaded.getBatchSettings()).boxCount, 25);
 });

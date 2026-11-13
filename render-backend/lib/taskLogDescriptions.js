@@ -56,6 +56,7 @@ const TASK_TYPE_LABELS = {
   presetteam_getinfo: "读取阵容信息",
   presetteam_saveteam: "切换阵容",
   dailyRunner: "日常任务检查",
+  taskStarted: "定时任务开始",
   taskCompleted: "定时任务完成",
   maintenanceDeferred: "维护避让",
   accountRetry: "失败账号重试",

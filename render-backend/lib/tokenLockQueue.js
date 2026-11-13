@@ -16,6 +16,12 @@ export class TokenLockQueue {
     return this.holders.get(String(tokenId)) || null;
   }
 
+  snapshot() {
+    return Object.fromEntries(
+      [...this.holders.entries()].map(([tokenId, taskId]) => [tokenId, taskId]),
+    );
+  }
+
   /**
    * Acquire one account lock, waiting behind earlier requests when necessary.
    * @param {string} tokenId Account identity.
