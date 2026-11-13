@@ -51,7 +51,26 @@ test("local store persists tokens, tasks and task logs", async (t) => {
     status: "success",
     message: "完成",
   });
-  assert.equal((await store.listTaskLogs(10))[0].message, "完成");
+  await store.appendTaskLog({
+    task_id: task.id,
+    token_name: token.name,
+    task_type: "dailyBundle",
+    status: "error",
+    message: "失败",
+  });
+  assert.equal((await store.listTaskLogs(10))[0].message, "失败");
+  assert.deepEqual(
+    (await store.listTaskLogs(10, { status: "success" })).map(
+      (entry) => entry.message,
+    ),
+    ["完成"],
+  );
+  assert.deepEqual(
+    (await store.listTaskLogs(10, { status: "error" })).map(
+      (entry) => entry.message,
+    ),
+    ["失败"],
+  );
 
   const reloaded = createLocalStore({ dataDir: directory });
   await reloaded.init();

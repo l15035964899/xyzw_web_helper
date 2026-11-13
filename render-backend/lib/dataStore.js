@@ -106,12 +106,14 @@ function createSupabaseStore(url, key) {
     return data;
   }
 
-  async function listTaskLogs(limit = 100) {
-    const { data, error } = await supabase
+  async function listTaskLogs(limit = 100, { status = null } = {}) {
+    let query = supabase
       .from("task_logs")
       .select("*")
       .order("created_at", { ascending: false })
       .limit(limit);
+    if (status) query = query.eq("status", status);
+    const { data, error } = await query;
     throwIfError(error);
     return data || [];
   }

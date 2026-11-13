@@ -791,9 +791,13 @@ app.get("/api/logs", (req, res) => {
 });
 
 app.get("/api/logs/db", async (req, res) => {
-  const limit = Math.min(Number.parseInt(req.query.limit) || 100, 500);
+  const limit = Math.min(Number.parseInt(req.query.limit) || 100, 5000);
+  const status =
+    typeof req.query.status === "string" && req.query.status.trim()
+      ? req.query.status.trim()
+      : null;
   try {
-    res.json(await dataStore.listTaskLogs(limit));
+    res.json(await dataStore.listTaskLogs(limit, { status }));
   } catch (error) {
     res.status(500).json({ error: error.message });
   }

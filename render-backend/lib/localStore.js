@@ -241,7 +241,7 @@ export function createLocalStore({ dataDir }) {
     });
   }
 
-  async function listTaskLogs(limit = 100) {
+  async function listTaskLogs(limit = 100, { status = null } = {}) {
     try {
       const content = await fs.readFile(logsFile, "utf8");
       const parsed = [];
@@ -253,7 +253,10 @@ export function createLocalStore({ dataDir }) {
           // Ignore a torn final line after an interrupted write.
         }
       }
-      return parsed.slice(-Math.max(1, limit)).reverse();
+      const filtered = status
+        ? parsed.filter((entry) => entry.status === status)
+        : parsed;
+      return filtered.slice(-Math.max(1, limit)).reverse();
     } catch (error) {
       if (error?.code === "ENOENT") return [];
       throw error;

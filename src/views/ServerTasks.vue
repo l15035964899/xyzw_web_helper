@@ -213,11 +213,14 @@
       <div class="panel-title">
         <div>
           <h2>执行日志</h2>
-          <p>服务端任务执行后写入 NAS 本地日志文件。</p>
+          <p>
+            服务端任务执行后写入 NAS 本地日志文件；ERROR
+            过滤会扫描全部保留日志。
+          </p>
         </div>
         <n-space align="center">
           <n-checkbox v-model:checked="errorOnly">
-            只看 ERROR（{{ errorLogCount }}）
+            只看 ERROR（全部 {{ errorLogCount }}）
           </n-checkbox>
           <n-checkbox v-model:checked="autoRefresh">自动刷新（10s）</n-checkbox>
           <n-button :loading="logLoading" @click="loadLogs">刷新</n-button>
@@ -655,6 +658,7 @@ const accounts = ref([]);
 const tasks = ref([]);
 const definitions = ref([]);
 const logs = ref([]);
+const errorLogs = ref([]);
 const loading = ref(false);
 const logLoading = ref(false);
 const taskRefreshing = ref(false);
@@ -749,14 +753,10 @@ const sortedTasks = computed(() =>
   }),
 );
 
-const errorLogCount = computed(
-  () => logs.value.filter((entry) => entry.status === "error").length,
-);
+const errorLogCount = computed(() => errorLogs.value.length);
 
 const visibleLogs = computed(() =>
-  errorOnly.value
-    ? logs.value.filter((entry) => entry.status === "error")
-    : logs.value,
+  errorOnly.value ? errorLogs.value : logs.value,
 );
 
 const connectionText = computed(() => {
@@ -854,8 +854,12 @@ async function loadDefinitions() {
 async function loadLogs() {
   logLoading.value = true;
   try {
-    const data = await request("/api/logs/db?limit=100");
-    logs.value = Array.isArray(data) ? data : [];
+    const [recent, errors] = await Promise.all([
+      request("/api/logs/db?limit=100"),
+      request("/api/logs/db?status=error&limit=5000"),
+    ]);
+    logs.value = Array.isArray(recent) ? recent : [];
+    errorLogs.value = Array.isArray(errors) ? errors : [];
   } catch (error) {
     console.error("加载日志失败", error);
   } finally {
