@@ -6490,10 +6490,9 @@ const stopBatch = () => {
 }
 
 .schedule-toolbar {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(280px, 0.8fr) minmax(0, 1.2fr);
   align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
   gap: 12px;
   min-width: 0;
   padding: 10px 12px;
@@ -6747,6 +6746,14 @@ const stopBatch = () => {
   .right-column {
     width: 380px;
   }
+
+  .schedule-toolbar {
+    grid-template-columns: 1fr;
+  }
+
+  .schedule-actions {
+    justify-content: flex-start;
+  }
 }
 
 @media (max-width: 992px) {
@@ -6830,8 +6837,7 @@ const stopBatch = () => {
   }
 
   .schedule-toolbar {
-    flex-direction: column;
-    align-items: stretch;
+    grid-template-columns: 1fr;
     gap: 10px;
   }
 
