@@ -122,6 +122,7 @@ const CMD_DEFAULTS = {
   mergebox_claimcostprogress: { actType: 1 },
   mergebox_claimmergeprogress: { actType: 1 },
   discount_claimreward: { discountId: 1 },
+  card_claimreward: { cardId: 1 },
   collection_claimfreereward: {},
   bottlehelper_stop: { bottleType: -1 },
   store_getpurchase: {},

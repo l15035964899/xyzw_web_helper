@@ -79,3 +79,48 @@ test("battle commands fetch the current battle version and inject it once", asyn
   assert.equal(calls[3].params.battleVersion, 240999);
   assert.equal(calls[3].params.targetId, 9002);
 });
+
+test("card claims include the browser-compatible default card id", async () => {
+  const sent = [];
+  class Socket {
+    static OPEN = 1;
+    readyState = Socket.OPEN;
+    send(raw) {
+      sent.push(raw);
+    }
+  }
+  const { GameClient } = await loadModule(
+    new URL("../render-backend/lib/gameClient.js", import.meta.url),
+    {
+      "./bonProtocol.js": {
+        bon: { encode: (value) => value },
+        encode: (value) => value,
+        getEnc: () => "x",
+      },
+      ws: { default: Socket },
+    },
+  );
+  const client = new GameClient({ roleToken: "secret-test-token", roleId: 1 });
+  client.connected = true;
+  client.ws = new Socket();
+  const release = (seq) => {
+    const pending = client.promises[seq];
+    clearTimeout(pending.timer);
+    delete client.promises[seq];
+    pending.resolve({ ok: true });
+  };
+
+  const defaultClaim = client.sendWithPromise("card_claimreward", {}, 1000);
+  assert.equal(JSON.stringify(sent[0].body), JSON.stringify({ cardId: 1 }));
+  release(1);
+  await defaultClaim;
+
+  const permanentCardClaim = client.sendWithPromise(
+    "card_claimreward",
+    { cardId: 4003 },
+    1000,
+  );
+  assert.equal(JSON.stringify(sent[1].body), JSON.stringify({ cardId: 4003 }));
+  release(2);
+  await permanentCardClaim;
+});
