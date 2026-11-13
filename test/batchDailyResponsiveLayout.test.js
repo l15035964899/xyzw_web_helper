@@ -34,3 +34,10 @@ test("log controls can wrap instead of collapsing Chinese labels", () => {
     /\.log-header-controls\s*\{[^}]*flex-wrap:\s*wrap/,
   );
 });
+
+test("scheduled task modal uses a compact paginated table with last run", () => {
+  assert.match(source, /class="task-table"/);
+  assert.match(source, /上次执行/);
+  assert.match(source, /formatTaskLastRun\(task\.lastRunAt\)/);
+  assert.match(source, /paginatedScheduledTasks/);
+});

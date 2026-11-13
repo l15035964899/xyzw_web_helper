@@ -1767,94 +1767,119 @@
       v-model:show="showTasksModal"
       preset="card"
       title="定时任务列表"
-      style="width: 90%; max-width: 800px"
+      style="width: 94%; max-width: 1200px"
     >
-      <div class="tasks-list" style="max-height: 600px; overflow-y: auto">
-        <div
-          v-for="task in sortedScheduledTasks"
-          :key="task.id"
-          class="task-item"
-          style="
-            margin-bottom: 16px;
-            padding: 12px;
-            border: 1px solid #e5e7eb;
-            border-radius: 8px;
-          "
-        >
-          <div
-            style="
-              display: flex;
-              justify-content: space-between;
-              align-items: center;
-              margin-bottom: 8px;
-            "
-          >
-            <div style="font-weight: bold">{{ task.name }}</div>
-            <n-switch
-              v-model:value="task.enabled"
-              @update:value="toggleTaskEnabled(task.id, $event)"
+      <div class="task-table-toolbar">
+        <n-input
+          v-model:value="taskListSearch"
+          clearable
+          placeholder="搜索任务名称"
+          style="max-width: 260px"
+        />
+        <n-text depth="3">
+          共 {{ filteredScheduledTasks.length }} 个任务，按下次执行时间排序
+        </n-text>
+      </div>
+      <div class="task-table-wrap">
+        <table class="task-table">
+          <thead>
+            <tr>
+              <th>任务名称</th>
+              <th>调度</th>
+              <th>上次执行</th>
+              <th>下次执行</th>
+              <th>账号 / 任务</th>
+              <th>启用</th>
+              <th class="task-table-actions">操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr
+              v-for="task in paginatedScheduledTasks"
+              :key="task.id"
+              :class="{ 'task-row-disabled': !task.enabled }"
             >
-            </n-switch>
-          </div>
-          <div style="margin-bottom: 4px">
-            <span style="color: #6b7280">运行类型：</span>
-            <span>{{
-              task.runType === "daily" ? "每天固定时间" : "Cron表达式"
-            }}</span>
-          </div>
-          <div style="margin-bottom: 4px">
-            <span style="color: #6b7280">运行时间：</span>
-            <span>{{
-              task.runType === "daily" ? task.runTime : task.cronExpression
-            }}</span>
-          </div>
-          <div style="margin-bottom: 4px">
-            <span style="color: #6b7280">下次执行：</span>
-            <span
-              :style="{
-                fontWeight: 'bold',
-                color: taskCountdowns[task.id]?.isNearExecution
-                  ? '#ff4d4f'
-                  : '#1677ff',
-              }"
-            >
-              {{
-                task.enabled
-                  ? taskCountdowns[task.id]?.formatted || "计算中..."
-                  : "已禁用"
-              }}
-            </span>
-          </div>
-          <div style="margin-bottom: 4px">
-            <span style="color: #6b7280">选中账号：</span>
-            <span>{{ task.selectedTokens.length }} 个</span>
-          </div>
-          <div style="margin-bottom: 8px">
-            <span style="color: #6b7280">选中任务：</span>
-            <span>{{ task.selectedTasks.length }} 个</span>
-          </div>
-          <div style="display: flex; gap: 8px">
-            <n-button size="tiny" @click="editTask(task)"> 编辑 </n-button>
-            <n-button size="tiny" type="error" @click="deleteTask(task.id)">
-              删除
-            </n-button>
-            <n-button
-              size="tiny"
-              type="info"
-              secondary
-              :loading="executingTaskIds.includes(task.id)"
-              @click="manualExecuteTask(task)"
-            >
-              立即执行
-            </n-button>
-          </div>
-        </div>
-        <div
-          v-if="scheduledTasks.length === 0"
-          style="text-align: center; padding: 24px; color: #6b7280"
-        >
-          暂无定时任务
-        </div>
+              <td class="task-name-cell">
+                <span class="task-name">{{ task.name }}</span>
+              </td>
+              <td class="task-schedule-cell">
+                <n-tag size="small" :type="task.runType === 'daily' ? 'info' : 'default'">
+                  {{ task.runType === "daily" ? "每天" : "Cron" }}
+                </n-tag>
+                <code>
+                  {{
+                    task.runType === "daily"
+                      ? task.runTime
+                      : task.cronExpression
+                  }}
+                </code>
+              </td>
+              <td class="task-time-cell">
+                {{ formatTaskLastRun(task.lastRunAt) }}
+              </td>
+              <td class="task-time-cell task-next-cell">
+                {{
+                  task.enabled
+                    ? taskCountdowns[task.id]?.formatted || "计算中..."
+                    : "已禁用"
+                }}
+              </td>
+              <td>
+                {{ task.selectedTokens.length }} / {{ task.selectedTasks.length }}
+              </td>
+              <td>
+                <n-switch
+                  v-model:value="task.enabled"
+                  size="small"
+                  @update:value="toggleTaskEnabled(task.id, $event)"
+                />
+              </td>
+              <td class="task-table-actions">
+                <div class="task-row-actions">
+                  <n-button size="tiny" @click="editTask(task)">
+                    编辑
+                  </n-button>
+                  <n-button
+                    size="tiny"
+                    type="info"
+                    secondary
+                    :loading="executingTaskIds.includes(task.id)"
+                    @click="manualExecuteTask(task)"
+                  >
+                    执行
+                  </n-button>
+                  <n-button
+                    size="tiny"
+                    type="error"
+                    secondary
+                    @click="deleteTask(task.id)"
+                  >
+                    删除
+                  </n-button>
+                </div>
+              </td>
+            </tr>
+            <tr v-if="paginatedScheduledTasks.length === 0">
+              <td colspan="7" class="task-table-empty">
+                {{ taskListSearch ? "没有匹配的定时任务" : "暂无定时任务" }}
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div
+        v-if="filteredScheduledTasks.length > taskListPageSize"
+        class="task-table-footer"
+      >
+        <n-text depth="3">
+          第 {{ taskListPage }} / {{ taskListPageCount }} 页
+        </n-text>
+        <n-pagination
+          v-model:page="taskListPage"
+          :item-count="filteredScheduledTasks.length"
+          :page-size="taskListPageSize"
+          :page-slot="5"
+        />
       </div>
     </n-modal>
 
@@ -3856,6 +3881,9 @@ const syncingNasAccounts = ref(false);
 const nasTokenIdMap = ref(readNasTokenIdMap());
 const showTaskModal = ref(false); // Control the visibility of the add/edit task modal
 const showTasksModal = ref(false); // Control the visibility of the tasks list modal
+const taskListPage = ref(1);
+const taskListPageSize = 8;
+const taskListSearch = ref("");
 const showRedeemCodeModal = ref(false); // Control the visibility of the redeem code modal
 const editingTask = ref(null); // Currently editing task
 
@@ -4669,6 +4697,53 @@ const sortedScheduledTasks = computed(() =>
     return Number(calculateNextExecutionTime(task)) || Number.POSITIVE_INFINITY;
   }),
 );
+
+const filteredScheduledTasks = computed(() => {
+  const query = taskListSearch.value.trim().toLowerCase();
+  if (!query) return sortedScheduledTasks.value;
+  return sortedScheduledTasks.value.filter((task) =>
+    [task.name, task.runType, task.runTime, task.cronExpression]
+      .filter(Boolean)
+      .some((value) => String(value).toLowerCase().includes(query)),
+  );
+});
+
+const taskListPageCount = computed(() =>
+  Math.max(
+    1,
+    Math.ceil(filteredScheduledTasks.value.length / taskListPageSize),
+  ),
+);
+
+const paginatedScheduledTasks = computed(() => {
+  const start = (taskListPage.value - 1) * taskListPageSize;
+  return filteredScheduledTasks.value.slice(start, start + taskListPageSize);
+});
+
+const formatTaskLastRun = (value) => {
+  if (!value) return "从未";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toLocaleString("zh-CN", {
+    timeZone: "Asia/Shanghai",
+    hour12: false,
+  });
+};
+
+watch(taskListSearch, () => {
+  taskListPage.value = 1;
+});
+
+watch(
+  () => filteredScheduledTasks.value.length,
+  () => {
+    taskListPage.value = Math.min(taskListPage.value, taskListPageCount.value);
+  },
+);
+
+watch(showTasksModal, (shown) => {
+  if (shown) taskListPage.value = 1;
+});
 
 // Start countdown interval
 let countdownInterval = null;
@@ -5644,10 +5719,6 @@ const filterErrorsOnly = ref(false);
 
 const normalizedServerLogs = computed(() =>
   serverLogs.value.map((entry) => {
-    const taskName =
-      scheduledTasks.value.find((task) => task.id === entry.task_id)?.name ||
-      entry.task_type ||
-      "NAS 任务";
     const status = String(entry.level || entry.status || "info");
     return {
       time: new Date(entry.created_at).toLocaleTimeString("zh-CN", {
@@ -5661,7 +5732,7 @@ const normalizedServerLogs = computed(() =>
             : status === "warning" || status === "warn"
               ? "warning"
               : "info",
-      message: `[${taskName}]${entry.token_name ? `[${entry.token_name}]` : ""} ${entry.message || ""}`,
+      message: entry.message || "",
     };
   }),
 );
@@ -6685,6 +6756,129 @@ const stopBatch = () => {
   margin-right: 8px;
 }
 
+.task-table-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.task-table-wrap {
+  max-height: 62vh;
+  overflow: auto;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+}
+
+.task-table {
+  width: 100%;
+  min-width: 900px;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 13px;
+}
+
+.task-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 10px 12px;
+  background: var(--bg-tertiary, #f7f8fa);
+  color: var(--text-secondary, #667085);
+  font-weight: 600;
+  text-align: left;
+  white-space: nowrap;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.task-table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border-color);
+  vertical-align: middle;
+}
+
+.task-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.task-table tbody tr:hover td {
+  background: var(--bg-tertiary, #fafafa);
+}
+
+.task-row-disabled td {
+  color: #98a2b3;
+}
+
+.task-name-cell {
+  min-width: 150px;
+  max-width: 240px;
+}
+
+.task-name {
+  display: inline-block;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: middle;
+  font-weight: 600;
+}
+
+.task-schedule-cell {
+  white-space: nowrap;
+}
+
+.task-schedule-cell code {
+  margin-left: 8px;
+  color: #475467;
+  font-size: 12px;
+}
+
+.task-time-cell {
+  min-width: 150px;
+  white-space: nowrap;
+}
+
+.task-next-cell {
+  color: #1677ff;
+  font-weight: 600;
+}
+
+.task-table-actions {
+  position: sticky;
+  right: 0;
+  min-width: 190px;
+  background: var(--card-color, #fff);
+}
+
+.task-table th.task-table-actions {
+  z-index: 2;
+}
+
+.task-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.task-table-empty {
+  padding: 36px 16px !important;
+  color: #98a2b3;
+  text-align: center;
+}
+
+.task-table-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding-top: 12px;
+}
+
 .token-row {
   display: flex;
   align-items: center;
@@ -6886,6 +7080,20 @@ const stopBatch = () => {
     flex-direction: row;
     flex-wrap: wrap;
     gap: 8px 12px;
+  }
+
+  .task-table-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .task-table-toolbar :deep(.n-input) {
+    width: 100%;
+    max-width: none !important;
+  }
+
+  .task-table-footer {
+    justify-content: center;
   }
 
   /* 批量功法残卷赠送样式 */

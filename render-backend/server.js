@@ -33,11 +33,6 @@ import {
 import { getMaintenanceDelay } from "./lib/maintenanceWindow.js";
 import { ManualLeaseManager } from "./lib/manualLeaseManager.js";
 import { createNativeTaskDefinitions } from "./lib/nativeBatchTasks.js";
-import {
-  shouldRetryTokenAttempt,
-  TOKEN_RETRY_DELAYS_MS,
-} from "./lib/retryPolicy.js";
-import { formatTaskLogMessage } from "./lib/taskLogDescriptions.js";
 import { TokenLockQueue } from "./lib/tokenLockQueue.js";
 
 dotenv.config();
@@ -277,7 +272,42 @@ async function executeTaskUnlocked(task, runId, { source = "nas" } = {}) {
     task,
     await dataStore.getBatchSettings(),
   );
-  addLog("INFO", "task", `开始执行任务: ${task.name}`, { taskId: task.id });
+  const addTaskRunLog = async (
+    message,
+    {
+      type = "info",
+      taskType = null,
+      token = null,
+      runId = null,
+      source = "nas",
+    } = {},
+  ) => {
+    const safeMessage = sanitizeLogMessage(message);
+    addLog(
+      type === "error"
+        ? "ERROR"
+        : type === "warning"
+          ? "WARN"
+          : "INFO",
+      "task",
+      safeMessage,
+      { taskId: task.id, tokenId: token?.id || null, source },
+    );
+    await logToDb(
+      task.id,
+      token?.name || null,
+      taskType,
+      type === "warning" ? "warn" : type,
+      safeMessage,
+      { runId, tokenId: token?.id || null, source, level: type },
+    );
+  };
+
+  await addTaskRunLog(`=== 开始执行定时任务: ${task.name} ===`, {
+    taskType: "taskStarted",
+    runId,
+    source,
+  });
 
   // 兼容旧字段 token_ids 和新字段 selected_tokens
   let tokenIds = task.selected_tokens || task.token_ids;
@@ -289,7 +319,11 @@ async function executeTaskUnlocked(task, runId, { source = "nas" } = {}) {
     }
   }
   if (!Array.isArray(tokenIds) || tokenIds.length === 0) {
-    addLog("WARN", "task", "没有选中的token，跳过", { taskId: task.id });
+    await addTaskRunLog("没有选中的token，跳过", {
+      type: "warning",
+      runId,
+      source,
+    });
     return;
   }
 
@@ -307,7 +341,11 @@ async function executeTaskUnlocked(task, runId, { source = "nas" } = {}) {
     taskKeys = [task.task_type];
   }
   if (!Array.isArray(taskKeys) || taskKeys.length === 0) {
-    addLog("ERROR", "task", "没有选择任何任务类型", { taskId: task.id });
+    await addTaskRunLog("没有选择任何任务类型", {
+      type: "error",
+      runId,
+      source,
+    });
     return;
   }
 
@@ -315,34 +353,41 @@ async function executeTaskUnlocked(task, runId, { source = "nas" } = {}) {
   for (const key of taskKeys) {
     const taskDef = TASK_DEFINITIONS[key];
     if (!taskDef) {
-      addLog("WARN", "task", `未知任务类型: ${key}，跳过`, { taskId: task.id });
+      await addTaskRunLog(`未知任务类型: ${key}，跳过`, {
+        type: "warning",
+        taskType: key,
+        runId,
+        source,
+      });
       continue;
     }
     taskDefinitions.push({ key, taskDef });
   }
   if (taskDefinitions.length === 0) {
-    addLog("ERROR", "task", "没有有效的命令可执行", { taskId: task.id });
+    await addTaskRunLog("没有有效的命令可执行", {
+      type: "error",
+      runId,
+      source,
+    });
     return;
   }
 
   const allTokens = await loadTokens();
   const targetTokens = allTokens.filter((t) => tokenIds.includes(t.id));
   if (targetTokens.length === 0) {
-    addLog("WARN", "task", "没有找到匹配的tokens", { taskId: task.id });
+    await addTaskRunLog("没有找到匹配的tokens", {
+      type: "warning",
+      runId,
+      source,
+    });
     return;
   }
 
-  addLog("INFO", "task", `将执行于 ${targetTokens.length} 个角色`, {
-    taskId: task.id,
+  await addTaskRunLog(`=== 将执行于 ${targetTokens.length} 个角色 ===`, {
+    taskType: "taskStarted",
+    runId,
+    source,
   });
-  await logToDb(
-    task.id,
-    null,
-    "taskStarted",
-    "info",
-    `开始执行 ${task.name}，共 ${targetTokens.length} 个账号`,
-    { runId, source },
-  );
 
   let taskHadErrors = false;
   let queued = false;
@@ -353,18 +398,18 @@ async function executeTaskUnlocked(task, runId, { source = "nas" } = {}) {
       onWait: (holderTaskId) => {
         if (queued) return;
         queued = true;
-        addLog(
-          "INFO",
-          "task",
-          `任务“${task.name}”已进入队列，等待前序任务结束`,
-          { taskId: task.id, holderTaskId },
+        void addTaskRunLog(
+          `任务“${task.name}”已进入队列，等待前序任务结束 (${holderTaskId})`,
+          { taskType: "taskQueue", runId, source },
         );
       },
     },
   );
   if (queued) {
-    addLog("INFO", "task", `任务“${task.name}”排队结束，开始执行`, {
-      taskId: task.id,
+    await addTaskRunLog(`任务“${task.name}”排队结束，开始执行`, {
+      taskType: "taskQueue",
+      runId,
+      source,
     });
   }
 
@@ -382,26 +427,39 @@ async function executeTaskUnlocked(task, runId, { source = "nas" } = {}) {
               isRestore: token.isRestore,
             };
     } catch (err) {
-      addLog("ERROR", "task", `Token解析失败: ${token.name}`, {
-        error: err.message,
+      await addTaskRunLog(`Token解析失败: ${token.name} (${err.message})`, {
+        type: "error",
+        taskType: "token",
+        token,
+        runId,
+        source,
       });
-      return { hadErrors: true, retryable: false };
+      return { hadErrors: true };
     }
 
     tokenData.name = token.name;
     const client = new GameClient(tokenData, token.ws_url);
-    let successCount = 0;
     let hadErrors = false;
-    let lastError = null;
-    let failureLogged = false;
+    await addTaskRunLog(`=== 开始执行: ${token.name} ===`, {
+      taskType: taskKeys.join(","),
+      token,
+      runId,
+      source,
+    });
+
     try {
       await client.connect(15000);
       try {
         await client.sendWithPromise("role_getroleinfo", {}, 8000);
         await sleep(500);
       } catch (e) {
-        addLog("WARN", "task", `获取角色信息失败 (${token.name})`, {
-          error: e.message,
+        hadErrors = true;
+        await addTaskRunLog(`${token.name}: 获取角色信息失败 (${e.message})`, {
+          type: "warning",
+          taskType: "role_getroleinfo",
+          token,
+          runId,
+          source,
         });
       }
 
@@ -412,151 +470,69 @@ async function executeTaskUnlocked(task, runId, { source = "nas" } = {}) {
             : await client.executeBatch(taskDef.commands, 800);
 
           for (const result of cmdResults) {
-            const status = result.success ? "success" : "error";
-            if (result.success) successCount += 1;
-            else hadErrors = true;
+            const type = result.success ? "success" : "error";
+            if (!result.success) hadErrors = true;
             const detail =
-              result.message || (result.success ? "OK" : result.error);
-            const logMessage = formatTaskLogMessage({
+              result.message ||
+              result.error ||
+              (result.success ? "执行成功" : "执行失败");
+            await addTaskRunLog(`${token.name}: ${detail}`, {
+              type,
               taskType: result.cmd,
-              status,
-              message: detail,
-            });
-            addLog(
-              result.success ? "INFO" : "ERROR",
-              "task",
-              `[${token.name}] ${logMessage}`,
-              { taskId: task.id },
-            );
-            await logToDb(task.id, token.name, result.cmd, status, logMessage, {
+              token,
               runId,
-              tokenId: token.id,
               source,
             });
           }
         } catch (error) {
           hadErrors = true;
-          lastError = error;
-          const logMessage = formatTaskLogMessage({
+          await addTaskRunLog(`${token.name}: ${error.message}`, {
+            type: "error",
             taskType: key,
-            status: "error",
-            message: error.message,
-          });
-          addLog("ERROR", "task", `[${token.name}] ${logMessage}`, {
-            taskId: task.id,
-          });
-          await logToDb(task.id, token.name, key, "error", logMessage, {
+            token,
             runId,
-            tokenId: token.id,
             source,
           });
-          failureLogged = true;
           if (!client.connected) break;
         }
       }
     } catch (error) {
       hadErrors = true;
-      lastError = error;
-      if (!failureLogged) {
-        const logMessage = formatTaskLogMessage({
-          taskType: taskKeys.join(","),
-          status: "error",
-          message: error.message,
-        });
-        addLog("ERROR", "task", `[${token.name}] ${logMessage}`, {
-          taskId: task.id,
-        });
-        await logToDb(
-          task.id,
-          token.name,
-          taskKeys.join(","),
-          "error",
-          logMessage,
-          { runId, tokenId: token.id, source },
-        );
-      }
+      await addTaskRunLog(`${token.name}: ${error.message}`, {
+        type: "error",
+        taskType: taskKeys.join(","),
+        token,
+        runId,
+        source,
+      });
     } finally {
       client.disconnect();
     }
 
-    return {
-      hadErrors,
-      retryable: shouldRetryTokenAttempt({ successCount, error: lastError }),
-    };
+    await addTaskRunLog(`=== ${token.name} 连接清理结束 ===`, {
+      type: "info",
+      taskType: taskKeys.join(","),
+      token,
+      runId,
+      source,
+    });
+    return { hadErrors };
   };
 
   try {
-    let retryTokens = [];
     for (const token of targetTokens) {
       const result = await runTokenAttempt(token);
-      if (result.retryable) retryTokens.push(token);
-      else if (result.hadErrors) taskHadErrors = true;
+      if (result.hadErrors) taskHadErrors = true;
       await sleep(2000);
     }
 
-    for (
-      let retryIndex = 0;
-      retryIndex < TOKEN_RETRY_DELAYS_MS.length && retryTokens.length > 0;
-      retryIndex += 1
-    ) {
-      const retryNumber = retryIndex + 1;
-      const delay = TOKEN_RETRY_DELAYS_MS[retryIndex];
-      const retryMessage =
-        `首轮执行结束，${retryTokens.length} 个账号将在 ` +
-        `${Math.round(delay / 1000)} 秒后进行第 ${retryNumber} 次重试`;
-      addLog("WARN", "task", retryMessage, { taskId: task.id });
-      await logToDb(task.id, null, "accountRetry", "info", retryMessage, {
-        runId,
-        source,
-      });
-      await sleep(delay);
-
-      const nextRetryTokens = [];
-      for (const token of retryTokens) {
-        addLog("INFO", "task", `[${token.name}] 开始第 ${retryNumber} 次重试`, {
-          taskId: task.id,
-        });
-        const result = await runTokenAttempt(token);
-        if (result.retryable) {
-          if (retryIndex === TOKEN_RETRY_DELAYS_MS.length - 1) {
-            taskHadErrors = true;
-            addLog(
-              "WARN",
-              "task",
-              `[${token.name}] 第 ${retryNumber} 次重试后仍未连接`,
-              { taskId: task.id },
-            );
-          } else {
-            nextRetryTokens.push(token);
-          }
-        } else if (result.hadErrors) {
-          taskHadErrors = true;
-        } else {
-          addLog(
-            "INFO",
-            "task",
-            `[${token.name}] 第 ${retryNumber} 次重试成功`,
-            { taskId: task.id },
-          );
-        }
-        await sleep(2000);
-      }
-      retryTokens = nextRetryTokens;
-    }
-
     await dataStore.markTaskRun(task.id);
-    const completionMessage = `已完成${task.name}`;
-    addLog(taskHadErrors ? "WARN" : "INFO", "task", completionMessage, {
-      taskId: task.id,
+    await addTaskRunLog(`=== 定时任务执行完成: ${task.name} ===`, {
+      type: taskHadErrors ? "error" : "success",
+      taskType: "taskCompleted",
+      runId,
+      source,
     });
-    await logToDb(
-      task.id,
-      null,
-      "taskCompleted",
-      taskHadErrors ? "error" : "success",
-      completionMessage,
-      { runId, source },
-    );
   } finally {
     taskLease.release();
   }
@@ -568,7 +544,7 @@ async function logToDb(
   taskType,
   status,
   message,
-  { runId = null, tokenId = null, source = "nas" } = {},
+  { runId = null, tokenId = null, source = "nas", level = null } = {},
 ) {
   try {
     await dataStore.appendTaskLog({
@@ -578,7 +554,7 @@ async function logToDb(
       token_name: tokenName,
       task_type: taskType,
       status: status || "info",
-      level: status || "info",
+      level: level || status || "info",
       source,
       message: sanitizeLogMessage(message || ""),
     });
