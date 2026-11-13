@@ -1809,7 +1809,7 @@
     >
       <div class="tasks-list" style="max-height: 600px; overflow-y: auto">
         <div
-          v-for="task in scheduledTasks"
+          v-for="task in sortedScheduledTasks"
           :key="task.id"
           class="task-item"
           style="
@@ -3190,6 +3190,7 @@ import {
 } from "@/utils/manualLease";
 import { readNasTokenIdMap } from "@/utils/nasTokenBootstrap";
 import { syncLocalTokensToServer } from "@/utils/serverTokenSync";
+import { sortScheduledTasks } from "@/utils/sortScheduledTasks";
 
 import { DEFAULT_WEIRD_TOWER_MAX_CLIMB } from "@/utils/towerClimbLimit.js";
 
@@ -4695,6 +4696,17 @@ const shortestCountdownTask = computed(() => {
 
   return shortestTask;
 });
+
+const sortedScheduledTasks = computed(() =>
+  sortScheduledTasks(scheduledTasks.value, (task) => {
+    if (!task.enabled) return Number.POSITIVE_INFINITY;
+    const cached = Number(nextExecutionTimes.value[task.id]);
+    if (Number.isFinite(cached) && cached > 0) return cached;
+    const serverNext = new Date(task.nextRunAt).getTime();
+    if (Number.isFinite(serverNext)) return serverNext;
+    return Number(calculateNextExecutionTime(task)) || Number.POSITIVE_INFINITY;
+  }),
+);
 
 // Start countdown interval
 let countdownInterval = null;
