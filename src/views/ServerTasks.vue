@@ -216,6 +216,9 @@
           <p>服务端任务执行后写入 NAS 本地日志文件。</p>
         </div>
         <n-space align="center">
+          <n-checkbox v-model:checked="errorOnly">
+            只看 ERROR（{{ errorLogCount }}）
+          </n-checkbox>
           <n-checkbox v-model:checked="autoRefresh">自动刷新（10s）</n-checkbox>
           <n-button :loading="logLoading" @click="loadLogs">刷新</n-button>
         </n-space>
@@ -232,7 +235,10 @@
             </tr>
           </thead>
           <tbody>
-            <tr v-for="entry in logs" :key="entry.id || entry.created_at">
+            <tr
+              v-for="entry in visibleLogs"
+              :key="entry.id || entry.created_at"
+            >
               <td>{{ formatDate(entry.created_at, true) }}</td>
               <td>
                 <n-tag
@@ -259,8 +265,10 @@
                 {{ formatLogMessage(entry) }}
               </td>
             </tr>
-            <tr v-if="!logs.length">
-              <td colspan="4" class="empty-cell">暂无执行日志</td>
+            <tr v-if="!visibleLogs.length">
+              <td colspan="4" class="empty-cell">
+                {{ errorOnly ? "没有 ERROR 级别日志" : "暂无执行日志" }}
+              </td>
             </tr>
           </tbody>
         </table>
@@ -654,6 +662,7 @@ const saving = ref(false);
 const connectionState = ref("idle");
 const errorMessage = ref("");
 const autoRefresh = ref(false);
+const errorOnly = ref(false);
 const backupInput = ref(null);
 const manualAccountVisible = ref(false);
 const taskDialogVisible = ref(false);
@@ -738,6 +747,16 @@ const sortedTasks = computed(() =>
     }
     return left.name.localeCompare(right.name, "zh-CN");
   }),
+);
+
+const errorLogCount = computed(
+  () => logs.value.filter((entry) => entry.status === "error").length,
+);
+
+const visibleLogs = computed(() =>
+  errorOnly.value
+    ? logs.value.filter((entry) => entry.status === "error")
+    : logs.value,
 );
 
 const connectionText = computed(() => {

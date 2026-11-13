@@ -20,6 +20,7 @@ import {
   runXuanwuBlessing,
 } from "./lib/gameTasks.js";
 import { createLoginProxyMiddleware } from "./lib/loginProxy.js";
+import { getMaintenanceDelay } from "./lib/maintenanceWindow.js";
 import { createNativeTaskDefinitions } from "./lib/nativeBatchTasks.js";
 import { formatTaskLogMessage } from "./lib/taskLogDescriptions.js";
 import { TokenLockQueue } from "./lib/tokenLockQueue.js";
@@ -462,6 +463,7 @@ async function logToDb(taskId, tokenName, taskType, status, message) {
 
 // ==================== 定时任务调度 ====================
 const cronJobs = new Map();
+const maintenanceWaitingTasks = new Set();
 
 async function registerAllCrons() {
   for (const job of cronJobs.values()) job.stop();
@@ -492,12 +494,62 @@ function registerCron(task) {
   try {
     const job = cron.schedule(
       cronExpr,
-      () => {
-        executeTask(task).catch((err) => {
+      async () => {
+        try {
+          let runnableTask = task;
+          const maintenance = getMaintenanceDelay(new Date());
+          if (maintenance.delayMs > 0 && maintenance.resumeAt) {
+            if (maintenanceWaitingTasks.has(task.id)) {
+              addLog(
+                "WARN",
+                "cron",
+                `任务“${task.name}”已在维护避让队列中，忽略重复触发`,
+                { taskId: task.id },
+              );
+              return;
+            }
+            maintenanceWaitingTasks.add(task.id);
+            const resumeText = maintenance.resumeAt.toLocaleString("zh-CN", {
+              timeZone: "Asia/Shanghai",
+              hour12: false,
+            });
+            const waitMessage = `周五维护避让：任务“${task.name}”将在 ${resumeText} 后补跑`;
+            addLog("WARN", "cron", waitMessage, { taskId: task.id });
+            await logToDb(
+              task.id,
+              null,
+              "maintenanceDeferred",
+              "info",
+              waitMessage,
+            );
+            try {
+              await sleep(maintenance.delayMs);
+            } finally {
+              maintenanceWaitingTasks.delete(task.id);
+            }
+            runnableTask = await dataStore.getTask(task.id);
+            if (!runnableTask?.enabled) {
+              addLog(
+                "INFO",
+                "cron",
+                `维护结束后任务“${task.name}”已停用或删除，取消补跑`,
+                { taskId: task.id },
+              );
+              return;
+            }
+            addLog(
+              "INFO",
+              "cron",
+              `维护窗口已结束，开始补跑任务“${task.name}”`,
+              { taskId: task.id },
+            );
+          }
+          await executeTask(runnableTask);
+        } catch (err) {
           addLog("ERROR", "cron", `任务执行异常: ${task.name}`, {
             error: err.message,
           });
-        });
+        }
       },
       { timezone: "Asia/Shanghai" },
     );

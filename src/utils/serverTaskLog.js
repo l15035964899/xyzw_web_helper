@@ -57,6 +57,7 @@ const TASK_TYPE_LABELS = {
   presetteam_saveteam: "切换阵容",
   dailyRunner: "日常任务检查",
   taskCompleted: "定时任务完成",
+  maintenanceDeferred: "维护避让",
   startBatch: "日常任务",
   claimHangUpRewards: "领取挂机并加钟",
   batchAddHangUpTime: "一键加钟",
