@@ -2074,35 +2074,9 @@
                   :key="group.id"
                   size="small"
                   :type="
-                    taskScheduleSelectedGroupIds.includes(group.id)
-                      ? 'primary'
-                      : 'default'
+                    isScheduleGroupSelected(group.id) ? 'primary' : 'default'
                   "
-                  @click="
-                    () => {
-                      const index = taskScheduleSelectedGroupIds.indexOf(
-                        group.id,
-                      );
-                      const groupTokenIds = getValidGroupTokenIds(group.id);
-
-                      if (index > -1) {
-                        // 取消选择该分组
-                        taskScheduleSelectedGroupIds.splice(index, 1);
-                        taskForm.selectedTokens =
-                          taskForm.selectedTokens.filter(
-                            (id) => !groupTokenIds.includes(id),
-                          );
-                      } else {
-                        // 选择该分组
-                        taskScheduleSelectedGroupIds.push(group.id);
-                        groupTokenIds.forEach((id) => {
-                          if (!taskForm.selectedTokens.includes(id)) {
-                            taskForm.selectedTokens.push(id);
-                          }
-                        });
-                      }
-                    }
-                  "
+                  @click="toggleScheduleGroupSelection(group.id)"
                   :style="{
                     borderColor: group.color,
                   }"
@@ -3184,6 +3158,11 @@ import {
   releaseManualLease,
 } from "@/utils/manualLease";
 import { readNasTokenIdMap } from "@/utils/nasTokenBootstrap";
+import {
+  getScheduleTokenValue,
+  hasSelectedScheduleTokens,
+  mapLocalTokenIdsToScheduleIds,
+} from "@/utils/scheduleTokenSelection";
 import { syncLocalTokensToServer } from "@/utils/serverTokenSync";
 import { sortScheduledTasks } from "@/utils/sortScheduledTasks";
 
@@ -3390,7 +3369,6 @@ const newGroupSelectedTokens = ref([]); // 新建分组时选中的Token ID列�
 const editingGroupId = ref(null);
 const editingGroupName = ref("");
 const editingGroupColor = ref("");
-const taskScheduleSelectedGroupIds = ref([]); // 定时任务中通过分组按钮选中的分组ID列表
 const groupColors = [
   "#1677ff", // 蓝色
   "#52c41a", // 绿色
@@ -3900,12 +3878,7 @@ const showRedeemCodeModal = ref(false); // Control the visibility of the redeem 
 const editingTask = ref(null); // Currently editing task
 
 function scheduleTokenValue(token) {
-  return (
-    nasTokenIdMap.value[token?.id] ||
-    token?.serverAccountId ||
-    token?.nasId ||
-    token?.id
-  );
+  return getScheduleTokenValue(token, nasTokenIdMap.value);
 }
 
 const scheduleTokens = computed(() => {
@@ -3927,6 +3900,41 @@ const taskForm = reactive({
   legionApplyTargetId: null, // Target legion for batchApplyLegion
   enabled: true, // Whether the task is enabled
 });
+
+function getScheduleGroupTokenIds(groupId) {
+  return mapLocalTokenIdsToScheduleIds(
+    tokenStore.getValidGroupTokenIds(groupId),
+    tokens.value,
+    nasTokenIdMap.value,
+  );
+}
+
+function isScheduleGroupSelected(groupId) {
+  return hasSelectedScheduleTokens(
+    getScheduleGroupTokenIds(groupId),
+    taskForm.selectedTokens,
+  );
+}
+
+function toggleScheduleGroupSelection(groupId) {
+  const groupTokenIds = getScheduleGroupTokenIds(groupId);
+  if (groupTokenIds.length === 0) return;
+
+  if (isScheduleGroupSelected(groupId)) {
+    const selectedIds = new Set(groupTokenIds.map(String));
+    taskForm.selectedTokens = taskForm.selectedTokens.filter(
+      (id) => !selectedIds.has(String(id)),
+    );
+    return;
+  }
+
+  const selectedIds = new Set(taskForm.selectedTokens.map(String));
+  for (const id of groupTokenIds) {
+    if (selectedIds.has(String(id))) continue;
+    taskForm.selectedTokens.push(id);
+    selectedIds.add(String(id));
+  }
+}
 
 // 任务分组定义
 const taskGroupDefinitions = [
@@ -4169,7 +4177,6 @@ const openTaskModal = async () => {
     legionApplyTargetId: null,
     enabled: true,
   });
-  taskScheduleSelectedGroupIds.value = [];
   showTaskModal.value = true;
 };
 
@@ -4209,7 +4216,6 @@ const editTask = async (task) => {
     enabled: true,
   });
   Object.assign(taskForm, taskData);
-  taskScheduleSelectedGroupIds.value = [];
   showTaskModal.value = true;
 };
 

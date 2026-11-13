@@ -42,3 +42,14 @@ test("scheduled task modal uses a compact paginated table with last run", () => 
   assert.match(source, /paginatedScheduledTasks/);
   assert.match(source, /\[5, 10, 20, 50\]/);
 });
+
+test("scheduled task groups map local tokens to NAS account IDs", () => {
+  assert.match(source, /mapLocalTokenIdsToScheduleIds/);
+  assert.match(source, /getScheduleGroupTokenIds/);
+  assert.match(source, /isScheduleGroupSelected\(group\.id\)/);
+  assert.match(
+    source,
+    /@click="toggleScheduleGroupSelection\(group\.id\)"/,
+  );
+  assert.doesNotMatch(source, /taskScheduleSelectedGroupIds/);
+});
