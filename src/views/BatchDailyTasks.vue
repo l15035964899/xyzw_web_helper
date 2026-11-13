@@ -4,132 +4,92 @@
       <!-- Left Column -->
       <div class="left-column">
         <!-- Header -->
-        <div
-          class="page-header"
-          style="
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            flex-wrap: wrap;
-            gap: 12px;
-          "
-        >
-          <div style="display: flex; align-items: center; gap: 16px">
-            <h2>批量日常任务</h2>
-            <div
-              style="
-                display: flex;
-                align-items: center;
-                gap: 12px;
-                padding: 8px 12px;
-                background-color: #f8f9fa;
-                border-radius: 8px;
-                border: 1px solid #e9ecef;
-              "
-            >
-              <div style="font-size: 14px; color: #495057">
-                共 {{ scheduledTasks.length }} 个 NAS 定时任务
-              </div>
-              <div
-                v-if="shortestCountdownTask"
-                style="font-size: 14px; font-weight: 500; color: #1677ff"
+        <div class="page-header">
+          <div class="page-header-main">
+            <h2 class="page-title">批量日常任务</h2>
+            <div class="primary-actions">
+              <n-button
+                type="primary"
+                @click="startBatch"
+                :disabled="isRunning || selectedTokens.length === 0"
+                size="medium"
               >
-                即将执行：{{ shortestCountdownTask.task.name }} ({{
-                  shortestCountdownTask.countdown.formatted
-                }})
-              </div>
-              <div v-else style="font-size: 14px; color: #6c757d">
-                暂无定时任务
-              </div>
-              <div style="display: flex; gap: 8px">
-                <n-button type="primary" size="small" @click="openTaskModal">
-                  新增定时任务
-                </n-button>
-                <n-button
-                  size="small"
-                  :loading="scheduledTasksLoading"
-                  @click="showTasksModal = true"
-                >
-                  查看定时任务
-                </n-button>
-                <n-button size="small" @click="openServerAccounts">
-                  NAS 账号
-                </n-button>
-                <n-button
-                  size="small"
-                  :loading="syncingNasAccounts"
-                  @click="syncAccountsToNas"
-                >
-                  同步账号
-                </n-button>
-                <n-button size="small" @click="exportConfig">
-                  导出配置
-                </n-button>
-                <n-upload
-                  :show-file-list="false"
-                  accept=".json"
-                  :custom-request="importConfig"
-                >
-                  <n-button size="small">导入配置</n-button>
-                </n-upload>
-              </div>
-              <div
-                class="setting-item"
-                style="
-                  flex-direction: row;
-                  justify-content: space-between;
-                  align-items: center;
-                "
+                {{ isRunning ? "执行中..." : "开始执行" }}
+              </n-button>
+              <n-button
+                @click="stopBatch"
+                :disabled="!isRunning"
+                type="error"
+                size="medium"
               >
-                <label class="setting-label">黑市采购清单配置</label>
-                <n-button size="small" @click="openBlackMarketPurchaseModal">
-                  点击配置
-                </n-button>
-              </div>
+                停止
+              </n-button>
+              <n-button
+                @click="openTemplateManagerModal"
+                type="info"
+                size="medium"
+              >
+                任务模板
+              </n-button>
+              <n-button @click="openBatchSettings" size="medium">
+                <template #icon>
+                  <n-icon>
+                    <Settings />
+                  </n-icon>
+                </template>
+                设置
+              </n-button>
             </div>
           </div>
-          <div
-            style="
-              display: flex;
-              align-items: center;
-              gap: 12px;
-              padding: 8px 12px;
-              background-color: #f8f9fa;
-              border-radius: 8px;
-              border: 1px solid #e9ecef;
-            "
-          >
-            <n-button
-              type="primary"
-              @click="startBatch"
-              :disabled="isRunning || selectedTokens.length === 0"
-              size="medium"
-            >
-              {{ isRunning ? "执行中..." : "开始执行" }}
-            </n-button>
-            <n-button
-              @click="stopBatch"
-              :disabled="!isRunning"
-              type="error"
-              size="medium"
-            >
-              停止
-            </n-button>
-            <n-button
-              @click="openTemplateManagerModal"
-              type="info"
-              size="medium"
-            >
-              任务模板
-            </n-button>
-            <n-button @click="openBatchSettings" type="default" size="medium">
-              <template #icon>
-                <n-icon>
-                  <Settings />
-                </n-icon>
-              </template>
-              设置
-            </n-button>
+
+          <div class="schedule-toolbar">
+            <div class="schedule-summary">
+              <n-tag type="info" round size="small">
+                共 {{ scheduledTasks.length }} 个 NAS 定时任务
+              </n-tag>
+              <span v-if="shortestCountdownTask" class="schedule-next">
+                即将执行：{{ shortestCountdownTask.task.name }}
+                <strong>
+                  （{{ shortestCountdownTask.countdown.formatted }}）
+                </strong>
+              </span>
+              <span v-else class="schedule-empty">暂无定时任务</span>
+            </div>
+            <div class="schedule-actions">
+              <n-button type="primary" size="small" @click="openTaskModal">
+                新增定时任务
+              </n-button>
+              <n-button
+                size="small"
+                :loading="scheduledTasksLoading"
+                @click="showTasksModal = true"
+              >
+                查看定时任务
+              </n-button>
+              <n-button size="small" @click="openServerAccounts">
+                NAS 账号
+              </n-button>
+              <n-button
+                size="small"
+                :loading="syncingNasAccounts"
+                @click="syncAccountsToNas"
+              >
+                同步账号
+              </n-button>
+              <n-button size="small" @click="exportConfig">
+                导出配置
+              </n-button>
+              <n-upload
+                :show-file-list="false"
+                accept=".json"
+                :custom-request="importConfig"
+              >
+                <n-button size="small">导入配置</n-button>
+              </n-upload>
+              <n-button size="small" @click="openBlackMarketPurchaseModal">
+                黑市采购清单
+              </n-button>
+            </div>
           </div>
         </div>
 
@@ -735,23 +695,25 @@
         <n-card class="log-card">
           <template #header>
             <div class="custom-card-header">
-              <div class="card-title">
-                {{
-                  currentRunningTokenName
-                    ? `正在执行: ${currentRunningTokenName}`
-                    : "执行日志"
-                }}
-                <span
-                  style="margin-left: 12px; font-size: 12px; color: #86909c"
+              <div class="log-title-row">
+                <div class="card-title">
+                  {{
+                    currentRunningTokenName
+                      ? `正在执行: ${currentRunningTokenName}`
+                      : "执行日志"
+                  }}
+                  <span class="log-count">{{ displayLogs.length }}</span>
+                </div>
+                <n-radio-group
+                  v-model:value="logSource"
+                  size="small"
+                  class="log-source-switch"
                 >
-                  {{ displayLogs.length }}
-                </span>
-              </div>
-              <div class="log-header-controls">
-                <n-radio-group v-model:value="logSource" size="small">
                   <n-radio-button value="local">本页</n-radio-button>
                   <n-radio-button value="server">NAS</n-radio-button>
                 </n-radio-group>
+              </div>
+              <div class="log-header-controls">
                 <n-checkbox v-model:checked="autoScrollLog" size="small">
                   自动滚动
                 </n-checkbox>
@@ -6495,9 +6457,82 @@ const stopBatch = () => {
 
 .page-header {
   display: flex;
-  justify-content: space-between;
-  align-items: center;
+  flex-direction: column;
+  gap: 12px;
   margin-bottom: 20px;
+  min-width: 0;
+}
+
+.page-header-main {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  min-width: 0;
+}
+
+.page-title {
+  margin: 0;
+  font-size: 24px;
+  white-space: nowrap;
+}
+
+.primary-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px;
+  background: #f8f9fa;
+  border: 1px solid #e9ecef;
+  border-radius: 8px;
+}
+
+.schedule-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  min-width: 0;
+  padding: 10px 12px;
+  background: #f8f9fa;
+  border: 1px solid #e9ecef;
+  border-radius: 8px;
+}
+
+.schedule-summary {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+  color: #495057;
+}
+
+.schedule-next {
+  font-size: 13px;
+  color: #1677ff;
+  overflow-wrap: anywhere;
+}
+
+.schedule-next strong {
+  white-space: nowrap;
+}
+
+.schedule-empty {
+  font-size: 13px;
+  color: #6c757d;
+}
+
+.schedule-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
 }
 
 .token-item {
@@ -6515,10 +6550,21 @@ const stopBatch = () => {
   width: 100%;
   display: flex;
   flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.log-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
   gap: 8px;
+  min-width: 0;
 }
 
 .card-title {
+  min-width: 0;
   font-size: 16px;
   font-weight: 600;
   white-space: nowrap;
@@ -6526,12 +6572,23 @@ const stopBatch = () => {
   text-overflow: ellipsis;
 }
 
+.log-count {
+  margin-left: 8px;
+  color: #86909c;
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.log-source-switch {
+  flex-shrink: 0;
+}
+
 .log-header-controls {
   display: flex;
   align-items: center;
-  gap: 12px;
-  justify-content: flex-end;
-  flex-wrap: nowrap;
+  gap: 8px 12px;
+  justify-content: flex-start;
+  flex-wrap: wrap;
 }
 
 /* Cron Parser Styles */
@@ -6585,12 +6642,6 @@ const stopBatch = () => {
   display: flex;
   flex-direction: column;
   overflow: hidden;
-}
-
-.log-header-controls {
-  display: flex;
-  align-items: center;
-  gap: 8px;
 }
 
 .log-container {
@@ -6755,14 +6806,58 @@ const stopBatch = () => {
   }
 
   .page-header {
-    flex-direction: column;
     gap: 12px;
+  }
+
+  .page-header-main {
+    flex-direction: column;
     align-items: stretch;
   }
 
-  .page-header .actions {
-    display: flex;
+  .page-title {
+    font-size: 22px;
+  }
+
+  .primary-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: 100%;
     gap: 8px;
+  }
+
+  .primary-actions :deep(.n-button) {
+    width: 100%;
+  }
+
+  .schedule-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+
+  .schedule-summary {
+    align-items: flex-start;
+  }
+
+  .schedule-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: 100%;
+    gap: 8px;
+  }
+
+  .schedule-actions :deep(.n-button),
+  .schedule-actions :deep(.n-upload) {
+    width: 100%;
+  }
+
+  .log-title-row {
+    align-items: center;
+  }
+
+  .card-title {
+    flex: 1 1 160px;
+    white-space: normal;
   }
 
   .log-card {
@@ -6782,9 +6877,10 @@ const stopBatch = () => {
   }
 
   .log-header-controls {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 4px;
+    align-items: center;
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: 8px 12px;
   }
 
   /* 批量功法残卷赠送样式 */
