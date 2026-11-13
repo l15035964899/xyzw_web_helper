@@ -40,4 +40,5 @@ test("scheduled task modal uses a compact paginated table with last run", () => 
   assert.match(source, /上次执行/);
   assert.match(source, /formatTaskLastRun\(task\.lastRunAt\)/);
   assert.match(source, /paginatedScheduledTasks/);
+  assert.match(source, /\[5, 10, 20, 50\]/);
 });

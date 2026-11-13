@@ -1776,9 +1776,17 @@
           placeholder="搜索任务名称"
           style="max-width: 260px"
         />
-        <n-text depth="3">
-          共 {{ filteredScheduledTasks.length }} 个任务，按下次执行时间排序
-        </n-text>
+        <div class="task-table-toolbar-meta">
+          <n-text depth="3">
+            共 {{ filteredScheduledTasks.length }} 个任务，按下次执行时间排序
+          </n-text>
+          <n-select
+            v-model:value="taskListPageSize"
+            :options="taskPageSizeOptions"
+            size="small"
+            style="width: 110px"
+          />
+        </div>
       </div>
       <div class="task-table-wrap">
         <table class="task-table">
@@ -3882,7 +3890,11 @@ const nasTokenIdMap = ref(readNasTokenIdMap());
 const showTaskModal = ref(false); // Control the visibility of the add/edit task modal
 const showTasksModal = ref(false); // Control the visibility of the tasks list modal
 const taskListPage = ref(1);
-const taskListPageSize = 8;
+const taskListPageSize = ref(10);
+const taskPageSizeOptions = [5, 10, 20, 50].map((value) => ({
+  label: `${value} 条/页`,
+  value,
+}));
 const taskListSearch = ref("");
 const showRedeemCodeModal = ref(false); // Control the visibility of the redeem code modal
 const editingTask = ref(null); // Currently editing task
@@ -4711,13 +4723,16 @@ const filteredScheduledTasks = computed(() => {
 const taskListPageCount = computed(() =>
   Math.max(
     1,
-    Math.ceil(filteredScheduledTasks.value.length / taskListPageSize),
+    Math.ceil(filteredScheduledTasks.value.length / taskListPageSize.value),
   ),
 );
 
 const paginatedScheduledTasks = computed(() => {
-  const start = (taskListPage.value - 1) * taskListPageSize;
-  return filteredScheduledTasks.value.slice(start, start + taskListPageSize);
+  const start = (taskListPage.value - 1) * taskListPageSize.value;
+  return filteredScheduledTasks.value.slice(
+    start,
+    start + taskListPageSize.value,
+  );
 });
 
 const formatTaskLastRun = (value) => {
@@ -4731,6 +4746,10 @@ const formatTaskLastRun = (value) => {
 };
 
 watch(taskListSearch, () => {
+  taskListPage.value = 1;
+});
+
+watch(taskListPageSize, () => {
   taskListPage.value = 1;
 });
 
@@ -6765,6 +6784,14 @@ const stopBatch = () => {
   margin-bottom: 12px;
 }
 
+.task-table-toolbar-meta {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
 .task-table-wrap {
   max-height: 62vh;
   overflow: auto;
@@ -7090,6 +7117,15 @@ const stopBatch = () => {
   .task-table-toolbar :deep(.n-input) {
     width: 100%;
     max-width: none !important;
+  }
+
+  .task-table-toolbar-meta {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .task-table-toolbar-meta :deep(.n-select) {
+    width: 100% !important;
   }
 
   .task-table-footer {

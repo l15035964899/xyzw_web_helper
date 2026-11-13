@@ -26,6 +26,7 @@ import {
   runXuanwuBlessing,
 } from "./lib/gameTasks.js";
 import { createLoginProxyMiddleware } from "./lib/loginProxy.js";
+import { getShanghaiDayStart } from "./lib/logRetention.js";
 import {
   normalizeClientTaskLog,
   sanitizeLogMessage,
@@ -679,17 +680,14 @@ async function init() {
   await dataStore.init();
   await registerAllCrons();
 
-  // 每天中午12点清理前一天的任务日志
+  // 每天上海时间 00:00 删除当天之前的任务日志。
   cron.schedule(
-    "0 12 * * *",
+    "0 0 * * *",
     async () => {
       addLog("INFO", "cron", "执行每日日志清理...");
       try {
-        const yesterday = new Date();
-        yesterday.setDate(yesterday.getDate() - 1);
-        yesterday.setHours(0, 0, 0, 0);
         const deleted = await dataStore.deleteTaskLogsBefore(
-          yesterday.toISOString(),
+          getShanghaiDayStart().toISOString(),
         );
         addLog("INFO", "cron", `已清理 ${deleted} 条旧任务日志`);
       } catch (err) {

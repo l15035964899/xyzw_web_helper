@@ -8,6 +8,9 @@ let pending = [];
 let flushTimer = null;
 let flushing = null;
 let context = {};
+const browserLogSessionId = `browser_${Date.now()}_${Math.random()
+  .toString(36)
+  .slice(2, 8)}`;
 
 function normalizeLevel(type) {
   if (type === "warning" || type === "warn") return "warning";
@@ -33,6 +36,8 @@ export function clearBrowserLogContext() {
 export function queueBrowserLog(log = {}) {
   pending.push({
     ...context,
+    run_id: context.run_id || browserLogSessionId,
+    source: context.source || "browser-manual",
     level: normalizeLevel(log.type),
     message: String(log.message || ""),
     created_at: log.created_at || new Date().toISOString(),
