@@ -6490,9 +6490,9 @@ const stopBatch = () => {
 }
 
 .schedule-toolbar {
-  display: grid;
-  grid-template-columns: minmax(280px, 0.8fr) minmax(0, 1.2fr);
-  align-items: center;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
   gap: 12px;
   min-width: 0;
   padding: 10px 12px;
@@ -6526,12 +6526,17 @@ const stopBatch = () => {
 }
 
 .schedule-actions {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
   align-items: center;
-  justify-content: flex-end;
-  flex-wrap: wrap;
+  width: 100%;
   gap: 8px;
   min-width: 0;
+}
+
+.schedule-actions :deep(.n-button),
+.schedule-actions :deep(.n-upload) {
+  width: 100%;
 }
 
 .token-item {
@@ -6748,11 +6753,11 @@ const stopBatch = () => {
   }
 
   .schedule-toolbar {
-    grid-template-columns: 1fr;
+    gap: 10px;
   }
 
   .schedule-actions {
-    justify-content: flex-start;
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
   }
 }
 
@@ -6837,7 +6842,6 @@ const stopBatch = () => {
   }
 
   .schedule-toolbar {
-    grid-template-columns: 1fr;
     gap: 10px;
   }
 
@@ -6850,11 +6854,6 @@ const stopBatch = () => {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     width: 100%;
     gap: 8px;
-  }
-
-  .schedule-actions :deep(.n-button),
-  .schedule-actions :deep(.n-upload) {
-    width: 100%;
   }
 
   .log-title-row {

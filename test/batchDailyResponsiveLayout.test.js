@@ -18,7 +18,10 @@ test("batch daily header uses responsive toolbar groups", () => {
   ]) {
     assert.match(source, new RegExp(`class="${className}"`));
   }
-  assert.match(source, /\.schedule-actions\s*\{[^}]*flex-wrap:\s*wrap/);
+  assert.match(
+    source,
+    /\.schedule-actions\s*\{[^}]*grid-template-columns:\s*repeat\(auto-fit,\s*minmax\(120px,\s*1fr\)\)/,
+  );
   assert.match(
     source,
     /@media \(max-width: 768px\)[\s\S]*\.schedule-actions\s*\{[^}]*grid-template-columns:\s*repeat\(2/,
