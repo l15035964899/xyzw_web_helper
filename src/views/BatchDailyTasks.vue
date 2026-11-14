@@ -3105,6 +3105,7 @@ import {
   saveServerSchedule,
   setServerScheduleEnabled,
 } from "@/api/batchSchedules";
+import useIndexedDB from "@/hooks/useIndexedDB";
 import { $emit } from "@/stores/events/index.ts";
 import { gameTokens, tokenGroups, useTokenStore } from "@/stores/tokenStore";
 // Import batch task modules
@@ -3170,6 +3171,7 @@ import { DEFAULT_WEIRD_TOWER_MAX_CLIMB } from "@/utils/towerClimbLimit.js";
 
 // Initialize token store, message service, and task runner
 const tokenStore = useTokenStore();
+const { getArrayBuffer: getRefreshCredentialBin } = useIndexedDB();
 const message = useMessage();
 const dialog = useDialog();
 const weirdTowerMaxClimb = ref(DEFAULT_WEIRD_TOWER_MAX_CLIMB);
@@ -4835,6 +4837,9 @@ const syncAccountsToNas = ({ quiet = false } = {}) => {
       const result = await syncLocalTokensToServer({
         tokens: tokenStore.gameTokens,
         request: requestBatchServer,
+        getRefreshCredential: async (token) =>
+          (await getRefreshCredentialBin(token.id)) ||
+          (await getRefreshCredentialBin(token.name)),
       });
       nasTokenIdMap.value = result.tokenIdMap || {};
       localStorage.setItem(
@@ -4843,13 +4848,17 @@ const syncAccountsToNas = ({ quiet = false } = {}) => {
       );
       serverAccounts.value = result.accounts || [];
       if (!quiet) {
-        if (result.failed) {
+        if (
+          result.failed ||
+          result.refreshCredentialsMissing ||
+          result.refreshCredentialsFailed
+        ) {
           message.warning(
-            `账号同步完成：新增 ${result.created}，更新 ${result.updated}，失败 ${result.failed}`,
+            `账号同步完成：新增 ${result.created}，更新 ${result.updated}，失败 ${result.failed}；自动刷新凭据已配置 ${result.refreshCredentialsConfigured}，缺少 ${result.refreshCredentialsMissing}，上传失败 ${result.refreshCredentialsFailed}`,
           );
         } else {
           message.success(
-            `NAS 账号已同步：新增 ${result.created}，更新 ${result.updated}`,
+            `NAS 账号已同步：新增 ${result.created}，更新 ${result.updated}；自动刷新凭据 ${result.refreshCredentialsConfigured} 个`,
           );
         }
       }

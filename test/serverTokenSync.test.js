@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { Buffer } from "node:buffer";
 import test from "node:test";
 import {
+  arrayBufferToBase64,
   decodeLocalTokenPayload,
   syncLocalTokensToServer,
 } from "../src/utils/serverTokenSync.js";
@@ -21,6 +22,57 @@ test("local token decoder accepts direct and base64 JSON", () => {
     ),
     payload,
   );
+});
+
+test("sync uploads the local BIN as a private refresh credential", async () => {
+  const previousStorage = globalThis.localStorage;
+  globalThis.localStorage = { getItem: () => null };
+  try {
+    const bin = new Uint8Array([1, 2, 3, 4, 5]);
+    const calls = [];
+    const server = [
+      { id: "server-a", roleId: 101, name: "账号一", enabled: true },
+    ];
+    const request = async (path, options = {}) => {
+      calls.push({ path, options });
+      if (path === "/api/tokens" && !options.method) return [...server];
+      if (path.endsWith("/refresh-credential") && options.method === "PUT") {
+        return { ok: true };
+      }
+      if (path.startsWith("/api/tokens/") && options.method === "PATCH") {
+        return [{ ...server[0], importMethod: "wxQrcode" }];
+      }
+      throw new Error(`Unexpected request: ${path}`);
+    };
+    const result = await syncLocalTokensToServer({
+      tokens: [
+        {
+          id: "local-a",
+          name: "账号一",
+          roleId: 101,
+          importMethod: "wxQrcode",
+          token: JSON.stringify({
+            roleToken: "role-token",
+            roleId: 101,
+            connId: 1_800_000_000_000,
+          }),
+        },
+      ],
+      request,
+      getRefreshCredential: async () => bin.buffer,
+    });
+
+    assert.equal(result.refreshCredentialsConfigured, 1);
+    assert.equal(result.refreshCredentialsMissing, 0);
+    assert.equal(result.refreshCredentialsFailed, 0);
+    assert.equal(arrayBufferToBase64(bin.buffer), "AQIDBAU=");
+    const upload = calls.find(({ path }) => path.endsWith("/refresh-credential"));
+    assert.equal(upload.options.body.bin_base64, "AQIDBAU=");
+    const update = calls.find(({ options }) => options.method === "PATCH");
+    assert.equal(update.options.body.importMethod, "wxQrcode");
+  } finally {
+    globalThis.localStorage = previousStorage;
+  }
 });
 
 test("sync updates existing role and adds a new account with local settings", async () => {

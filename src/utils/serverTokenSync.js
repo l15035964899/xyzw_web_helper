@@ -44,6 +44,16 @@ export function decodeLocalTokenPayload(raw) {
   throw new Error("无法解析本地 Token");
 }
 
+export function arrayBufferToBase64(buffer) {
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
+  }
+  return btoa(binary);
+}
+
 function readLocalSettings(tokenId) {
   try {
     const parsed = JSON.parse(
@@ -63,9 +73,14 @@ function readLocalSettings(tokenId) {
  * @param {object} options Sync inputs and API transport.
  * @param {Array} options.tokens Browser token records.
  * @param {Function} options.request Authenticated server request function.
- * @returns {Promise<{created:number,updated:number,failed:number,tokenIdMap:object,accounts:Array}>} Sync counts, ID map and resulting accounts.
+ * @param {Function} [options.getRefreshCredential] Reads the account's BIN bytes.
+ * @returns {Promise<object>} Sync counts, ID map and resulting accounts.
  */
-export async function syncLocalTokensToServer({ tokens = [], request }) {
+export async function syncLocalTokensToServer({
+  tokens = [],
+  request,
+  getRefreshCredential = null,
+}) {
   const current = await request("/api/tokens");
   const serverTokens = Array.isArray(current) ? current : [];
   const byRoleId = new Map(
@@ -76,6 +91,9 @@ export async function syncLocalTokensToServer({ tokens = [], request }) {
   let created = 0;
   let updated = 0;
   let failed = 0;
+  let refreshCredentialsConfigured = 0;
+  let refreshCredentialsMissing = 0;
+  let refreshCredentialsFailed = 0;
   const tokenIdMap = {};
 
   for (const token of tokens) {
@@ -94,21 +112,24 @@ export async function syncLocalTokensToServer({ tokens = [], request }) {
         isRestore: parsed.isRestore,
         ws_url: token.wsUrl || null,
         server: token.server || null,
+        importMethod: token.importMethod || existing?.importMethod || null,
         daily_settings: readLocalSettings(token.id),
         enabled: existing ? Boolean(existing.enabled) : token.enabled !== false,
       };
+      let serverTokenId = existing?.id || null;
 
       if (existing) {
         const [updatedToken] = await request(
           `/api/tokens/${encodeURIComponent(existing.id)}`,
           {
-          method: "PATCH",
-          body,
+            method: "PATCH",
+            body,
           },
         );
         const index = serverTokens.findIndex((item) => item.id === existing.id);
         if (index >= 0 && updatedToken) serverTokens[index] = updatedToken;
         tokenIdMap[token.id] = existing.id;
+        serverTokenId = existing.id;
         updated += 1;
       } else {
         const [createdToken] = await request("/api/tokens", {
@@ -117,10 +138,31 @@ export async function syncLocalTokensToServer({ tokens = [], request }) {
         });
         serverTokens.push(createdToken);
         tokenIdMap[token.id] = createdToken.id;
+        serverTokenId = createdToken.id;
         if (roleId != null) {
           byRoleId.set(String(roleId), createdToken);
         }
         created += 1;
+      }
+
+      if (getRefreshCredential && serverTokenId) {
+        try {
+          const credential = await getRefreshCredential(token);
+          if (!credential) {
+            refreshCredentialsMissing += 1;
+          } else {
+            await request(
+              `/api/tokens/${encodeURIComponent(serverTokenId)}/refresh-credential`,
+              {
+                method: "PUT",
+                body: { bin_base64: arrayBufferToBase64(credential) },
+              },
+            );
+            refreshCredentialsConfigured += 1;
+          }
+        } catch {
+          refreshCredentialsFailed += 1;
+        }
       }
     } catch {
       failed += 1;
@@ -131,6 +173,9 @@ export async function syncLocalTokensToServer({ tokens = [], request }) {
     created,
     updated,
     failed,
+    refreshCredentialsConfigured,
+    refreshCredentialsMissing,
+    refreshCredentialsFailed,
     tokenIdMap,
     accounts: serverTokens,
   };

@@ -1,4 +1,5 @@
-import { randomUUID } from "node:crypto";
+import { Buffer } from "node:buffer";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
@@ -59,6 +60,40 @@ function normalizeToken(input = {}) {
   };
 }
 
+function readTokenPayload(value) {
+  try {
+    const parsed = typeof value === "string" ? JSON.parse(value) : value;
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function sessionConnId(value, fallback = null) {
+  const payload = readTokenPayload(value);
+  const connId = Number(payload.connId ?? fallback);
+  return Number.isFinite(connId) && connId > 1e12 ? connId : null;
+}
+
+function preserveNewerSession(current, patch) {
+  if (!Object.hasOwn(patch, "token")) return patch;
+  const currentConnId = sessionConnId(current.token, current.connId);
+  const incomingConnId = sessionConnId(patch.token, patch.connId);
+  if (
+    currentConnId != null &&
+    (incomingConnId == null || incomingConnId < currentConnId)
+  ) {
+    return {
+      ...patch,
+      token: current.token,
+      sessId: current.sessId,
+      connId: current.connId,
+      isRestore: current.isRestore,
+    };
+  }
+  return patch;
+}
+
 function normalizeTask(input = {}) {
   const now = new Date().toISOString();
   return {
@@ -95,6 +130,10 @@ export function createLocalStore({ dataDir }) {
   const tasksFile = path.join(root, "cron-tasks.json");
   const batchSettingsFile = path.join(root, "batch-settings.json");
   const logsFile = path.join(root, "task-logs.jsonl");
+  const tokenRefreshCredentialsFile = path.join(
+    root,
+    "token-refresh-credentials.json",
+  );
   let writeQueue = Promise.resolve();
 
   async function readJson(file, fallback) {
@@ -112,6 +151,7 @@ export function createLocalStore({ dataDir }) {
       mode: 0o600,
     });
     await fs.rename(temporary, file);
+    await fs.chmod(file, 0o600);
   }
 
   function mutate(operation) {
@@ -138,10 +178,22 @@ export function createLocalStore({ dataDir }) {
       const current = await listTokens();
       const token = normalizeToken(input);
       const existing = current.findIndex((entry) => entry.id === token.id);
-      if (existing >= 0) current[existing] = { ...current[existing], ...token };
-      else current.push(token);
+      let saved;
+      if (existing >= 0) {
+        const patch = preserveNewerSession(current[existing], token);
+        current[existing] = normalizeToken({
+          ...current[existing],
+          ...patch,
+          id: token.id,
+          created_at: current[existing].created_at,
+        });
+        saved = current[existing];
+      } else {
+        current.push(token);
+        saved = token;
+      }
       await writeJson(tokensFile, current);
-      return token;
+      return saved;
     });
   }
 
@@ -150,9 +202,10 @@ export function createLocalStore({ dataDir }) {
       const current = await listTokens();
       const index = current.findIndex((token) => token.id === id);
       if (index < 0) return null;
+      const normalizedPatch = preserveNewerSession(current[index], patch);
       current[index] = normalizeToken({
         ...current[index],
-        ...patch,
+        ...normalizedPatch,
         id,
         created_at: current[index].created_at,
       });
@@ -167,7 +220,88 @@ export function createLocalStore({ dataDir }) {
       const next = current.filter((token) => token.id !== id);
       if (next.length === current.length) return false;
       await writeJson(tokensFile, next);
+      const credentials = await readJson(tokenRefreshCredentialsFile, {});
+      if (credentials && Object.hasOwn(credentials, id)) {
+        delete credentials[id];
+        await writeJson(tokenRefreshCredentialsFile, credentials);
+      }
       return true;
+    });
+  }
+
+  async function saveTokenRefreshCredential(tokenId, bin) {
+    return mutate(async () => {
+      const buffer = Buffer.isBuffer(bin) ? bin : Buffer.from(bin || []);
+      if (buffer.length === 0) throw new Error("BIN 登录凭据为空");
+      const now = new Date().toISOString();
+      const credentials = await readJson(tokenRefreshCredentialsFile, {});
+      const next =
+        credentials && typeof credentials === "object" ? credentials : {};
+      next[tokenId] = {
+        ...(next[tokenId] || {}),
+        bin_base64: buffer.toString("base64"),
+        sha256: createHash("sha256").update(buffer).digest("hex"),
+        updated_at: now,
+        last_error: null,
+      };
+      await writeJson(tokenRefreshCredentialsFile, next);
+      return {
+        configured: true,
+        updated_at: next[tokenId].updated_at,
+      };
+    });
+  }
+
+  async function getTokenRefreshCredential(tokenId) {
+    const credentials = await readJson(tokenRefreshCredentialsFile, {});
+    const entry = credentials?.[tokenId];
+    if (!entry?.bin_base64) return null;
+    return {
+      bin: Buffer.from(entry.bin_base64, "base64"),
+      sha256: entry.sha256 || null,
+      updated_at: entry.updated_at || null,
+      last_refresh_at: entry.last_refresh_at || null,
+      last_attempt_at: entry.last_attempt_at || null,
+      last_error: entry.last_error || null,
+    };
+  }
+
+  async function listTokenRefreshCredentialStatuses() {
+    const credentials = await readJson(tokenRefreshCredentialsFile, {});
+    if (!credentials || typeof credentials !== "object") return {};
+    return Object.fromEntries(
+      Object.entries(credentials).map(([tokenId, entry]) => [
+        tokenId,
+        {
+          configured: Boolean(entry?.bin_base64),
+          sha256: entry?.sha256 || null,
+          updated_at: entry?.updated_at || null,
+          last_refresh_at: entry?.last_refresh_at || null,
+          last_attempt_at: entry?.last_attempt_at || null,
+          last_error: entry?.last_error || null,
+        },
+      ]),
+    );
+  }
+
+  async function markTokenRefreshResult(
+    tokenId,
+    { success, attemptedAt, refreshedAt = null, error = null } = {},
+  ) {
+    return mutate(async () => {
+      const credentials = await readJson(tokenRefreshCredentialsFile, {});
+      if (!credentials?.[tokenId]) return null;
+      const entry = credentials[tokenId];
+      entry.last_attempt_at = attemptedAt || new Date().toISOString();
+      entry.last_error = success ? null : String(error || "未知错误");
+      if (success && refreshedAt) entry.last_refresh_at = refreshedAt;
+      await writeJson(tokenRefreshCredentialsFile, credentials);
+      return {
+        configured: true,
+        last_refresh_at: entry.last_refresh_at || null,
+        last_attempt_at: entry.last_attempt_at,
+        last_error: entry.last_error,
+      };
     });
   }
 
@@ -337,6 +471,10 @@ export function createLocalStore({ dataDir }) {
     createToken,
     updateToken,
     deleteToken,
+    saveTokenRefreshCredential,
+    getTokenRefreshCredential,
+    listTokenRefreshCredentialStatuses,
+    markTokenRefreshResult,
     listTasks,
     getTask,
     createTask,

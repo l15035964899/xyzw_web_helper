@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { Buffer } from "node:buffer";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -113,4 +114,63 @@ test("local store persists tokens, tasks and task logs", async (t) => {
   assert.equal((await reloaded.listTokens())[0].id, token.id);
   assert.equal((await reloaded.listTasks())[0].id, task.id);
   assert.equal((await reloaded.getBatchSettings()).boxCount, 25);
+});
+
+test("local store keeps the newest token session and private BIN credentials", async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "xyzw-session-"));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const store = createLocalStore({ dataDir: directory });
+  await store.init();
+  const older = 1_700_000_000_000;
+  const newer = older + 1000;
+  const token = await store.createToken({
+    id: "account-a",
+    name: "账号一",
+    enabled: true,
+    token: JSON.stringify({ roleToken: "initial", connId: newer }),
+  });
+
+  await store.updateToken(token.id, {
+    token: JSON.stringify({ roleToken: "stale", connId: older }),
+    connId: older,
+  });
+  assert.equal(
+    JSON.parse((await store.getToken(token.id)).token).roleToken,
+    "initial",
+  );
+
+  await store.updateToken(token.id, {
+    token: JSON.stringify({
+      roleToken: "newer",
+      connId: newer + 1000,
+    }),
+    connId: newer + 1000,
+  });
+  assert.equal(
+    JSON.parse((await store.getToken(token.id)).token).roleToken,
+    "newer",
+  );
+
+  await store.saveTokenRefreshCredential(token.id, Buffer.from("bin-secret"));
+  const credential = await store.getTokenRefreshCredential(token.id);
+  assert.equal(credential.bin.toString(), "bin-secret");
+  const statuses = await store.listTokenRefreshCredentialStatuses();
+  assert.equal(statuses[token.id].configured, true);
+  assert.equal(Object.hasOwn(statuses[token.id], "bin_base64"), false);
+  await store.markTokenRefreshResult(token.id, {
+    success: true,
+    attemptedAt: "2026-11-14T00:00:00.000Z",
+    refreshedAt: "2026-11-14T00:00:00.000Z",
+  });
+  const status = (await store.listTokenRefreshCredentialStatuses())[token.id];
+  assert.equal(status.last_refresh_at, "2026-11-14T00:00:00.000Z");
+
+  const credentialFile = path.join(
+    directory,
+    "token-refresh-credentials.json",
+  );
+  assert.equal((await fs.stat(credentialFile)).mode & 0o777, 0o600);
+
+  await store.deleteToken(token.id);
+  assert.equal(await store.getTokenRefreshCredential(token.id), null);
 });

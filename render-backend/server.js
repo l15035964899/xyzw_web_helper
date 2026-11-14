@@ -1,3 +1,4 @@
+import { Buffer } from "node:buffer";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -35,6 +36,7 @@ import { getMaintenanceDelay } from "./lib/maintenanceWindow.js";
 import { ManualLeaseManager } from "./lib/manualLeaseManager.js";
 import { createNativeTaskDefinitions } from "./lib/nativeBatchTasks.js";
 import { TokenLockQueue } from "./lib/tokenLockQueue.js";
+import { createTokenRefreshManager } from "./lib/tokenRefresh.js";
 
 dotenv.config();
 process.env.TZ = process.env.TZ || "Asia/Shanghai";
@@ -66,7 +68,7 @@ if (process.env.CORS_ORIGIN) {
     }),
   );
 }
-app.use(express.json());
+app.use(express.json({ limit: "2mb" }));
 
 // ==================== 数据存储 ====================
 const dataStore = createDataStore(process.env);
@@ -248,6 +250,10 @@ async function loadTokens() {
 const runningTasks = new Set();
 const tokenLockQueue = new TokenLockQueue();
 const manualLeaseManager = new ManualLeaseManager({ lockQueue: tokenLockQueue });
+const tokenRefreshManager = createTokenRefreshManager({
+  dataStore,
+  addLog,
+});
 
 async function executeTask(task, { source = "nas" } = {}) {
   if (!task?.id) throw new Error("任务缺少 id");
@@ -326,6 +332,23 @@ async function executeTaskUnlocked(task, runId, { source = "nas" } = {}) {
       source,
     });
     return;
+  }
+
+  const refreshSummary = await tokenRefreshManager.run({ tokenIds });
+  if (
+    refreshSummary.refreshed ||
+    refreshSummary.failed ||
+    refreshSummary.missingCredentials
+  ) {
+    await addTaskRunLog(
+      `Token 预检查：自动刷新 ${refreshSummary.refreshed}，缺少 BIN 凭据 ${refreshSummary.missingCredentials}，失败 ${refreshSummary.failed}`,
+      {
+        type: refreshSummary.failed ? "warning" : "info",
+        taskType: "tokenRefresh",
+        runId,
+        source,
+      },
+    );
   }
 
   // 支持多任务：selected_tasks 是数组，每个元素是 TASK_DEFINITIONS 的 key
@@ -850,10 +873,56 @@ app.patch("/api/tokens/:id", async (req, res) => {
   }
 });
 
+app.put("/api/tokens/:id/refresh-credential", async (req, res) => {
+  try {
+    const account = await dataStore.getToken(req.params.id);
+    if (!account) return res.status(404).json({ error: "账号不存在" });
+    const encoded = String(req.body?.bin_base64 || "");
+    if (!encoded) throw new Error("缺少 BIN 登录凭据");
+    if (encoded.length > 2_700_000) throw new Error("BIN 登录凭据过大");
+    const bin = Buffer.from(encoded, "base64");
+    if (bin.length < 32 || bin.length > 2_000_000) {
+      throw new Error("BIN 登录凭据格式错误");
+    }
+    const credential = await dataStore.saveTokenRefreshCredential(
+      req.params.id,
+      bin,
+    );
+    const refresh = await tokenRefreshManager.run({
+      tokenIds: [req.params.id],
+    });
+    res.json({ ok: true, ...credential, refresh });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
 app.delete("/api/tokens/:id", async (req, res) => {
   try {
     await dataStore.deleteToken(req.params.id);
     res.json({ ok: true });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+app.get("/api/token-refresh/status", async (req, res) => {
+  try {
+    res.json(await tokenRefreshManager.status());
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post("/api/token-refresh/run", async (req, res) => {
+  try {
+    const result = await tokenRefreshManager.run({
+      tokenIds: Array.isArray(req.body?.token_ids)
+        ? req.body.token_ids
+        : null,
+      force: Boolean(req.body?.force),
+    });
+    res.json(result);
   } catch (error) {
     res.status(400).json({ error: error.message });
   }
