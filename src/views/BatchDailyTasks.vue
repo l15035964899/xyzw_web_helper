@@ -4841,6 +4841,16 @@ const syncAccountsToNas = ({ quiet = false } = {}) => {
           (await getRefreshCredentialBin(token.id)) ||
           (await getRefreshCredentialBin(token.name)),
       });
+      if (
+        !result.failed &&
+        !result.refreshCredentialsMissing &&
+        !result.refreshCredentialsFailed
+      ) {
+        for (const duplicate of result.localDuplicates || []) {
+          await tokenStore.removeToken(duplicate.id);
+          delete nasTokenIdMap.value[duplicate.id];
+        }
+      }
       nasTokenIdMap.value = result.tokenIdMap || {};
       localStorage.setItem(
         "xyzw_nas_token_id_map",
@@ -4854,11 +4864,11 @@ const syncAccountsToNas = ({ quiet = false } = {}) => {
           result.refreshCredentialsFailed
         ) {
           message.warning(
-            `账号同步完成：新增 ${result.created}，更新 ${result.updated}，失败 ${result.failed}；自动刷新凭据已配置 ${result.refreshCredentialsConfigured}，缺少 ${result.refreshCredentialsMissing}，上传失败 ${result.refreshCredentialsFailed}`,
+            `账号同步完成：新增 ${result.created}，更新 ${result.updated}，忽略重复 ${result.localDuplicatesIgnored}，失败 ${result.failed}；自动刷新凭据已配置 ${result.refreshCredentialsConfigured}，缺少 ${result.refreshCredentialsMissing}，上传失败 ${result.refreshCredentialsFailed}`,
           );
         } else {
           message.success(
-            `NAS 账号已同步：新增 ${result.created}，更新 ${result.updated}；自动刷新凭据 ${result.refreshCredentialsConfigured} 个`,
+            `NAS 账号已同步：新增 ${result.created}，更新 ${result.updated}，忽略重复 ${result.localDuplicatesIgnored}；自动刷新凭据 ${result.refreshCredentialsConfigured} 个`,
           );
         }
       }

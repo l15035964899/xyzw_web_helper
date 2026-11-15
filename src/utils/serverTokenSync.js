@@ -18,6 +18,79 @@ function normalizePayload(value) {
   };
 }
 
+function canonicalRoleId(token) {
+  const nameRoleId = String(token?.name || "").match(/-(\d+)$/)?.[1];
+  if (nameRoleId) return nameRoleId;
+  try {
+    const parsed = decodeLocalTokenPayload(token?.token);
+    return String(token?.roleId ?? parsed.roleId ?? "") || null;
+  } catch {
+    return token?.roleId == null ? null : String(token.roleId);
+  }
+}
+
+function localSessionConnId(token) {
+  try {
+    const parsed = decodeLocalTokenPayload(token?.token);
+    const connId = Number(parsed.connId);
+    return Number.isFinite(connId) ? connId : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function compareScores(left, right) {
+  for (let index = 0; index < left.length; index += 1) {
+    if (left[index] !== right[index]) return left[index] - right[index];
+  }
+  return 0;
+}
+
+export function dedupeLocalTokenRecords(tokens = []) {
+  const groups = new Map();
+  for (const token of tokens) {
+    const roleId = canonicalRoleId(token);
+    if (!roleId) continue;
+    const parsedRoleId = (() => {
+      try {
+        return String(decodeLocalTokenPayload(token.token).roleId ?? "");
+      } catch {
+        return "";
+      }
+    })();
+    const score = [
+      String(token.roleId ?? "") === roleId ? 8 : 0,
+      parsedRoleId === roleId ? 4 : 0,
+      token.importMethod ? 1 : 0,
+      localSessionConnId(token),
+    ];
+    const current = groups.get(roleId);
+    if (!current || compareScores(score, current.score) > 0) {
+      groups.set(roleId, { token, roleId, score });
+    }
+  }
+
+  const keepers = new Map(
+    [...groups.values()].map(({ token, roleId }) => [token.id, roleId]),
+  );
+  const duplicates = [];
+  const unique = [];
+  for (const token of tokens) {
+    const roleId = canonicalRoleId(token);
+    if (!roleId || keepers.get(token.id) === roleId) {
+      unique.push(token);
+      continue;
+    }
+    duplicates.push({
+      id: token.id,
+      name: token.name,
+      roleId,
+      keeperId: [...keepers.entries()].find(([, id]) => id === roleId)?.[0],
+    });
+  }
+  return { tokens: unique, duplicates };
+}
+
 export function decodeLocalTokenPayload(raw) {
   const value = String(raw || "").trim();
   if (!value) throw new Error("Token 不能为空");
@@ -81,6 +154,8 @@ export async function syncLocalTokensToServer({
   request,
   getRefreshCredential = null,
 }) {
+  const localDedupe = dedupeLocalTokenRecords(tokens);
+  tokens = localDedupe.tokens;
   const current = await request("/api/tokens");
   const serverTokens = Array.isArray(current) ? current : [];
   const byRoleId = new Map(
@@ -176,6 +251,8 @@ export async function syncLocalTokensToServer({
     refreshCredentialsConfigured,
     refreshCredentialsMissing,
     refreshCredentialsFailed,
+    localDuplicates: localDedupe.duplicates,
+    localDuplicatesIgnored: localDedupe.duplicates.length,
     tokenIdMap,
     accounts: serverTokens,
   };

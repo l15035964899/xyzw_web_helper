@@ -1922,16 +1922,25 @@ const goToBatchDaily = async () => {
         (await getArrayBuffer(token.id)) || (await getArrayBuffer(token.name)),
     });
     if (
+      !result.failed &&
+      !result.refreshCredentialsMissing &&
+      !result.refreshCredentialsFailed
+    ) {
+      for (const duplicate of result.localDuplicates || []) {
+        await tokenStore.removeToken(duplicate.id);
+      }
+    }
+    if (
       result.failed ||
       result.refreshCredentialsMissing ||
       result.refreshCredentialsFailed
     ) {
       message.warning(
-        `账号同步完成；新增 ${result.created}，更新 ${result.updated}，Token 失败 ${result.failed}；自动刷新凭据已配置 ${result.refreshCredentialsConfigured}，缺少 ${result.refreshCredentialsMissing}，上传失败 ${result.refreshCredentialsFailed}`,
+        `账号同步完成；新增 ${result.created}，更新 ${result.updated}，忽略重复 ${result.localDuplicatesIgnored}，Token 失败 ${result.failed}；自动刷新凭据已配置 ${result.refreshCredentialsConfigured}，缺少 ${result.refreshCredentialsMissing}，上传失败 ${result.refreshCredentialsFailed}`,
       );
     } else {
       message.success(
-        `已同步到 NAS：新增 ${result.created} 个，更新 ${result.updated} 个；自动刷新凭据 ${result.refreshCredentialsConfigured} 个`,
+        `已同步到 NAS：新增 ${result.created} 个，更新 ${result.updated} 个，忽略重复 ${result.localDuplicatesIgnored} 个；自动刷新凭据 ${result.refreshCredentialsConfigured} 个`,
       );
     }
   } catch (error) {

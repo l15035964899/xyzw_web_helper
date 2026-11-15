@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   arrayBufferToBase64,
   decodeLocalTokenPayload,
+  dedupeLocalTokenRecords,
   syncLocalTokensToServer,
 } from "../src/utils/serverTokenSync.js";
 
@@ -22,6 +23,53 @@ test("local token decoder accepts direct and base64 JSON", () => {
     ),
     payload,
   );
+});
+
+test("legacy local tokens dedupe by the role ID contained in the account name", () => {
+  const oldIssued = 1_800_000_000_000;
+  const newIssued = oldIssued + 10_000;
+  const result = dedupeLocalTokenRecords([
+    {
+      id: "legacy",
+      name: "安安-0-101336362",
+      roleId: 92373121,
+      token: JSON.stringify({
+        roleToken: "legacy",
+        roleId: 92373121,
+        connId: oldIssued,
+      }),
+    },
+    {
+      id: "current",
+      name: "安安-0-101336362",
+      roleId: 101336362,
+      importMethod: "wxQrcode",
+      token: JSON.stringify({
+        roleToken: "current",
+        roleId: 101336362,
+        connId: newIssued,
+      }),
+    },
+    {
+      id: "different-role",
+      name: "安安-0-101336363",
+      roleId: 101336363,
+      token: JSON.stringify({
+        roleToken: "different",
+        roleId: 101336363,
+        connId: newIssued,
+      }),
+    },
+  ]);
+
+  assert.deepEqual(
+    result.tokens.map((token) => token.id),
+    ["current", "different-role"],
+  );
+  assert.equal(result.duplicates.length, 1);
+  assert.equal(result.duplicates[0].id, "legacy");
+  assert.equal(result.duplicates[0].keeperId, "current");
+  assert.equal(result.duplicates[0].roleId, "101336362");
 });
 
 test("sync uploads the local BIN as a private refresh credential", async () => {
