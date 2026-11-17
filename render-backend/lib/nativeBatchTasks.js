@@ -1456,6 +1456,7 @@ export const NATIVE_TASK_CATALOG = {
           { label: "青铜宝箱", value: 2002 },
           { label: "黄金宝箱", value: 2003 },
           { label: "铂金宝箱", value: 2004 },
+          { label: "钻石宝箱", value: 2005 },
         ],
       },
       {

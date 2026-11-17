@@ -6469,17 +6469,23 @@ const startBatch = async () => {
         commandDelay: batchSettings.commandDelay,
         taskDelay: batchSettings.taskDelay,
       });
-      const result = await runner.run(tokenId, {
-        shouldStop: () => shouldStop.value,
-        onLog: (log) =>
-          addLog({ ...log, message: `${token.name}: ${log.message}` }),
-        onProgress: (progress) =>
-          addLog({
-            time: new Date().toLocaleTimeString(),
-            message: `${token.name}: 服务器每日任务完成并领奖 ${progress}%`,
-            type: "info",
-          }),
-      });
+      const manualSettings = runner.loadSettings?.(tokenId) || {};
+      manualSettings.boxType = batchSettings.defaultBoxType;
+      const result = await runner.run(
+        tokenId,
+        {
+          shouldStop: () => shouldStop.value,
+          onLog: (log) =>
+            addLog({ ...log, message: `${token.name}: ${log.message}` }),
+          onProgress: (progress) =>
+            addLog({
+              time: new Date().toLocaleTimeString(),
+              message: `${token.name}: 服务器每日任务完成并领奖 ${progress}%`,
+              type: "info",
+            }),
+        },
+        manualSettings,
+      );
       tokenStatus.value[tokenId] = result.incomplete ? "pending" : "completed";
       addLog({
         time: new Date().toLocaleTimeString(),

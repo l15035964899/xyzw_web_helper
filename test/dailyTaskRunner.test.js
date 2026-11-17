@@ -7,6 +7,10 @@ const { DailyTaskRunner } = await loadModule(
   new URL("../src/utils/dailyTaskRunner.js", import.meta.url),
   { "@/utils/dailyTaskState": stateHelpers },
 );
+const { selectDailyBox } = await loadModule(
+  new URL("../render-backend/lib/dailyTaskRunner.js", import.meta.url),
+  { "./dailyTaskState.js": stateHelpers },
+);
 const definitions = [
   [1, 1, 1],
   [2, 2, 1],
@@ -148,11 +152,11 @@ test("completed-but-unclaimed tasks only claim their configured task IDs", async
   );
 });
 
-test("partial progress skips completed actions and preserves the original box batch", async () => {
+test("partial progress opens only the remaining daily boxes", async () => {
   const f = fixture({ 6: 2, 7: 2 });
   const result = await f.runner().run("account-a", {}, settings);
   assert.equal(f.calls.filter((c) => c.cmd === "system_buygold").length, 1);
-  assert.equal(f.calls.find((c) => c.cmd === "item_openbox").params.number, 10);
+  assert.equal(f.calls.find((c) => c.cmd === "item_openbox").params.number, 1);
   assert.equal(result.deferred, 0);
 });
 
@@ -417,6 +421,46 @@ test("server-claimed sign-in, cards and free gacha are not requested again", asy
   );
 });
 
+test("daily boxes prefer diamonds when at least three are available", async () => {
+  const f = fixture({ 7: 0 });
+  f.role.items = { 2005: { quantity: 5 }, 2003: { quantity: 100 } };
+  await f.runner().run("account-a", {}, { ...settings, boxType: 2003 });
+  const boxCalls = f.calls.filter((call) => call.cmd === "item_openbox");
+  assert.deepEqual(
+    boxCalls.map((call) => [call.params.itemId, call.params.number]),
+    [[2005, 3]],
+  );
+});
+
+test("daily boxes fall back to the configured type below three diamonds", async () => {
+  const f = fixture({ 7: 0 });
+  f.role.items = { 2005: { quantity: 2 }, 2003: { quantity: 100 } };
+  await f.runner().run("account-a", {}, { ...settings, boxType: 2003 });
+  const boxCalls = f.calls.filter((call) => call.cmd === "item_openbox");
+  assert.deepEqual(
+    boxCalls.map((call) => [call.params.itemId, call.params.number]),
+    [[2003, 3]],
+  );
+});
+
+test("daily diamond fallback uses wood when diamonds are also the default", () => {
+  assert.equal(
+    JSON.stringify(
+      selectDailyBox({
+        items: { 2005: { quantity: 1 } },
+        remaining: 3,
+        defaultBoxType: 2005,
+      }),
+    ),
+    JSON.stringify({
+      itemId: 2001,
+      count: 3,
+      diamondQuantity: 1,
+      fallback: true,
+    }),
+  );
+});
+
 test("a failed formation query never triggers a forced switch", async () => {
   const f = fixture();
   const send = f.store.sendMessageWithPromise;
@@ -558,7 +602,7 @@ test("box business error 400122 fails only that task and leaves it pending on th
     if (args[1] === "item_openbox") {
       boxRequests++;
       assert.equal(args[2].itemId, 2001);
-      assert.equal(args[2].number, 10);
+      assert.equal(args[2].number, 3);
       throw new Error("服务器错误: 400122 - 未知错误");
     }
     return send(...args);

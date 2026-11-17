@@ -18,6 +18,48 @@ const taskLabels = {
   13: "竞技场战斗",
   14: "收获盐罐",
 };
+
+const DAILY_BOX_TYPES = {
+  2001: "木质宝箱",
+  2002: "青铜宝箱",
+  2003: "黄金宝箱",
+  2004: "铂金宝箱",
+  2005: "钻石宝箱",
+};
+
+function normalizeBoxType(value, fallback = 2001) {
+  const parsed = Number(value);
+  return DAILY_BOX_TYPES[parsed] ? parsed : fallback;
+}
+
+export function selectDailyBox({
+  items = {},
+  remaining = 3,
+  defaultBoxType = 2001,
+} = {}) {
+  const required = Math.max(1, Math.trunc(Number(remaining) || 3));
+  const diamondQuantity = Math.max(
+    0,
+    Math.trunc(Number(items?.[2005]?.quantity) || 0),
+  );
+  const configured = normalizeBoxType(defaultBoxType);
+  if (diamondQuantity >= required) {
+    return {
+      itemId: 2005,
+      count: required,
+      diamondQuantity,
+      fallback: false,
+    };
+  }
+  const fallbackBoxType =
+    configured === 2005 ? 2001 : configured;
+  return {
+    itemId: fallbackBoxType,
+    count: required,
+    diamondQuantity,
+    fallback: true,
+  };
+}
 // 辅助函数
 const pickArenaTargetId = (targets) => {
   if (!targets) return null;
@@ -474,16 +516,32 @@ export class DailyTaskRunner {
     }
 
     if (!isTaskCompleted(7) && settings.openBox) {
+      const boxPlan = selectDailyBox({
+        items: roleData.items,
+        remaining: this.getTaskState(7).remaining,
+        defaultBoxType: settings.boxType,
+      });
+      const boxName = DAILY_BOX_TYPES[boxPlan.itemId];
       taskList.push({
-        name: "开启木质宝箱",
+        name: `开启${boxName}`,
         condition: 7,
-        execute: () =>
-          this.executeGameCommand(
-            tokenId,
-            "item_openbox",
-            { itemId: 2001, number: 10 },
-            "开启木质宝箱10个",
-          ),
+        execute: async () => {
+          this.log(
+            `开箱策略：钻石宝箱库存 ${boxPlan.diamondQuantity} 个，任务需要 ${boxPlan.count} 个，选择${boxName}${boxPlan.fallback ? "兜底" : "优先"}`,
+          );
+          let remaining = boxPlan.count;
+          while (remaining > 0) {
+            const batch = Math.min(10, remaining);
+            await this.executeGameCommand(
+              tokenId,
+              "item_openbox",
+              { itemId: boxPlan.itemId, number: batch },
+              `开启${boxName}${batch}个`,
+            );
+            remaining -= batch;
+          }
+          return true;
+        },
       });
     }
 

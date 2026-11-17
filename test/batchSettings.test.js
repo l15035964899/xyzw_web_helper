@@ -15,13 +15,20 @@ test("batch settings normalize execution values and preserve secrets", () => {
     password: "secret",
   });
   assert.equal(settings.boxCount, 25);
-  assert.equal(settings.defaultBoxType, 2004);
+  assert.equal(settings.defaultBoxType, 2005);
   assert.deepEqual(settings.dreamPurchaseList, ["1-5"]);
   assert.deepEqual(settings.blackMarketPurchaseList, [
     { itemId: 2002, discount: 10 },
   ]);
   assert.equal(settings.receiverId, "123");
   assert.equal(settings.password, "secret");
+});
+
+test("diamond boxes are accepted as a batch box type", () => {
+  assert.equal(
+    normalizeBatchSettings({ defaultBoxType: 2005 }).defaultBoxType,
+    2005,
+  );
 });
 
 test("task-specific options override NAS global settings", () => {

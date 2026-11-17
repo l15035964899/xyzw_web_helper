@@ -35,6 +35,7 @@ export function createTasksItem(deps) {
     2002: "青铜宝箱",
     2003: "黄金宝箱",
     2004: "铂金宝箱",
+    2005: "钻石宝箱",
   };
 
   const fishNames = { 1: "普通鱼竿", 2: "黄金鱼竿" };

@@ -82,9 +82,10 @@ function normalizeObject(value) {
   }
 }
 
-function taskSettings(token) {
+function taskSettings(token, options = {}) {
   return {
     ...DAILY_SETTINGS_DEFAULTS,
+    ...normalizeObject(options),
     ...normalizeObject(token?.daily_settings),
   };
 }
@@ -117,7 +118,10 @@ function logResult(results, status, message) {
  * Run the browser's server-driven daily task runner against a Node GameClient.
  * Account-specific settings can be stored in tokens.daily_settings.
  */
-export async function runDailyTasks(client, { token, delayMs = 500 } = {}) {
+export async function runDailyTasks(
+  client,
+  { token, delayMs = 500, task = null } = {},
+) {
   const results = [];
   const tokenStore = createTokenStore(client, token);
   const runner = new DailyTaskRunner(tokenStore, {
@@ -132,7 +136,7 @@ export async function runDailyTasks(client, { token, delayMs = 500 } = {}) {
         onLog: ({ message, type = "info" }) =>
           logResult(results, type, message),
       },
-      taskSettings(token),
+      taskSettings(token, task?.options),
     );
     results.push({
       cmd: "dailyBundle",

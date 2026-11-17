@@ -96,7 +96,7 @@ export function normalizeBatchSettings(input = {}) {
     cdkPlatformType: ["h5", "wx"].includes(value.cdkPlatformType)
       ? value.cdkPlatformType
       : "h5",
-    defaultBoxType: numberInRange(value.defaultBoxType, 2001, 2001, 2004),
+    defaultBoxType: numberInRange(value.defaultBoxType, 2001, 2001, 2005),
     defaultFishType: numberInRange(value.defaultFishType, 1, 1, 2),
     targetBoxPoints: numberInRange(value.targetBoxPoints, 1000, 1, 10_000),
     receiverId: stringValue(value.receiverId, "").trim(),

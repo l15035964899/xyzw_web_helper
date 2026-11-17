@@ -8,6 +8,7 @@ export const boxTypeOptions = [
   { label: "青铜宝箱", value: 2002 },
   { label: "黄金宝箱", value: 2003 },
   { label: "铂金宝箱", value: 2004 },
+  { label: "钻石宝箱", value: 2005 },
 ];
 
 // 鱼竿类型选项
