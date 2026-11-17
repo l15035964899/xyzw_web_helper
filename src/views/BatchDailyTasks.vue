@@ -6471,6 +6471,9 @@ const startBatch = async () => {
       });
       const manualSettings = runner.loadSettings?.(tokenId) || {};
       manualSettings.boxType = batchSettings.defaultBoxType;
+      manualSettings.blackMarketPurchaseList = (
+        batchSettings.blackMarketPurchaseList || []
+      ).map((item) => ({ ...item }));
       const result = await runner.run(
         tokenId,
         {

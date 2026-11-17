@@ -32,6 +32,25 @@ function normalizeBoxType(value, fallback = 2001) {
   return DAILY_BOX_TYPES[parsed] ? parsed : fallback;
 }
 
+function normalizeBlackMarketPurchaseList(value) {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set();
+  return value
+    .map((entry) => {
+      const itemId = Number(entry?.itemId);
+      const discount = Math.min(
+        10,
+        Math.max(1, Math.trunc(Number(entry?.discount) || 10)),
+      );
+      if (!Number.isInteger(itemId) || itemId <= 0 || seen.has(itemId)) {
+        return null;
+      }
+      seen.add(itemId);
+      return { itemId, discount };
+    })
+    .filter(Boolean);
+}
+
 export function selectDailyBox({
   items = {},
   remaining = 3,
@@ -163,6 +182,83 @@ export class DailyTaskRunner {
       }
       throw error;
     }
+  }
+
+  async purchaseDailyBlackMarket(tokenId, settings) {
+    await this.executeGameCommand(
+      tokenId,
+      "store_purchase",
+      { goodsId: 1 },
+      "黑市使用游戏内配置一键采购",
+    );
+    await this.refreshServerRole(tokenId);
+    if (this.getTaskState(12).status !== "pending") {
+      this.log("游戏内一键采购已满足黑市任务，无需使用网页端配置");
+      return true;
+    }
+
+    const configured = normalizeBlackMarketPurchaseList(
+      settings.blackMarketPurchaseList,
+    );
+    if (configured.length === 0) {
+      this.log("游戏内一键采购未获得物品，且网页端黑市清单为空", "warning");
+      return true;
+    }
+
+    this.log(
+      `游戏内一键采购未获得物品，改用网页端黑市清单（${configured.length} 项）`,
+      "warning",
+    );
+    const current = await this.executeGameCommand(
+      tokenId,
+      "store_getpurchase",
+      {},
+      "读取当前黑市采购配置",
+    );
+    const currentList = normalizeBlackMarketPurchaseList(
+      current?.purchaseItemList,
+    );
+    if (JSON.stringify(currentList) !== JSON.stringify(configured)) {
+      await this.executeGameCommand(
+        tokenId,
+        "store_setpurchase",
+        {
+          purchaseCnt: Math.max(1, Number(current?.purchaseCnt || 1)),
+          purchaseItemList: configured,
+        },
+        "写入网页端黑市采购配置",
+      );
+      const verified = await this.executeGameCommand(
+        tokenId,
+        "store_getpurchase",
+        {},
+        "校验网页端黑市采购配置",
+      );
+      if (
+        JSON.stringify(
+          normalizeBlackMarketPurchaseList(verified?.purchaseItemList),
+        ) !== JSON.stringify(configured)
+      ) {
+        throw new Error("网页端黑市采购清单写入后校验失败");
+      }
+    }
+
+    await this.executeGameCommand(
+      tokenId,
+      "store_purchase",
+      { goodsId: 1 },
+      "黑市使用网页端配置一键采购",
+    );
+    await this.refreshServerRole(tokenId);
+    if (this.getTaskState(12).status === "pending") {
+      this.log(
+        "网页端配置执行后仍没有符合折扣的商品，黑市任务保留待继续",
+        "warning",
+      );
+    } else {
+      this.log("网页端黑市配置采购成功，黑市任务已完成");
+    }
+    return true;
   }
 
   async switchToFormationIfNeeded(tokenId, targetFormation, formationName) {
@@ -844,13 +940,7 @@ export class DailyTaskRunner {
       taskList.push({
         name: "黑市购买1次物品",
         condition: 12,
-        execute: () =>
-          this.executeGameCommand(
-            tokenId,
-            "store_purchase",
-            { goodsId: 1 },
-            "黑市购买1次物品",
-          ),
+        execute: () => this.purchaseDailyBlackMarket(tokenId, settings),
       });
     }
 
