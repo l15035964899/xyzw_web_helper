@@ -35,6 +35,7 @@ import {
 import { getMaintenanceDelay } from "./lib/maintenanceWindow.js";
 import { ManualLeaseManager } from "./lib/manualLeaseManager.js";
 import { createNativeTaskDefinitions } from "./lib/nativeBatchTasks.js";
+import { createFailedTaskRetryScheduler } from "./lib/taskRetry.js";
 import { TokenLockQueue } from "./lib/tokenLockQueue.js";
 import { createTokenRefreshManager } from "./lib/tokenRefresh.js";
 
@@ -248,6 +249,7 @@ async function loadTokens() {
 
 // ==================== 任务执行引擎 ====================
 const runningTasks = new Set();
+let failedTaskRetryScheduler = null;
 const tokenLockQueue = new TokenLockQueue();
 const manualLeaseManager = new ManualLeaseManager({ lockQueue: tokenLockQueue });
 const tokenRefreshManager = createTokenRefreshManager({
@@ -255,7 +257,10 @@ const tokenRefreshManager = createTokenRefreshManager({
   addLog,
 });
 
-async function executeTask(task, { source = "nas" } = {}) {
+async function executeTask(
+  task,
+  { source = "nas", retryAttempt = 0 } = {},
+) {
   if (!task?.id) throw new Error("任务缺少 id");
   if (runningTasks.has(task.id)) {
     addLog("WARN", "task", `任务正在执行，跳过重复调用: ${task.name}`, {
@@ -266,11 +271,33 @@ async function executeTask(task, { source = "nas" } = {}) {
 
   runningTasks.add(task.id);
   const runId = randomUUID();
+  let result = null;
   try {
-    await executeTaskUnlocked(task, runId, { source });
+    result = await executeTaskUnlocked(task, runId, { source });
     return true;
   } finally {
     runningTasks.delete(task.id);
+    if (retryAttempt === 0 && result?.failedTokenIds?.length) {
+      const retry = failedTaskRetryScheduler?.schedule({
+        task,
+        tokenIds: result.failedTokenIds,
+        source,
+      });
+      if (retry) {
+        void logToDb(
+          task.id,
+          null,
+          "taskRetryScheduled",
+          "info",
+          `${task.name}: ${retry.tokenIds.length} 个失败账号将在 ${new Date(retry.scheduledAt).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", hour12: false })} 自动重试一次`,
+          { source: "nas-retry", level: "info" },
+        ).catch((error) =>
+          addLog("ERROR", "taskRetry", `记录重试计划失败: ${error.message}`, {
+            taskId: task.id,
+          }),
+        );
+      }
+    }
   }
 }
 
@@ -414,6 +441,7 @@ async function executeTaskUnlocked(task, runId, { source = "nas" } = {}) {
   });
 
   let taskHadErrors = false;
+  const failedTokenIds = [];
   let queued = false;
   const taskLease = await tokenLockQueue.acquireAll(
     targetTokens.map((token) => token.id),
@@ -546,7 +574,10 @@ async function executeTaskUnlocked(task, runId, { source = "nas" } = {}) {
   try {
     for (const token of targetTokens) {
       const result = await runTokenAttempt(token);
-      if (result.hadErrors) taskHadErrors = true;
+      if (result.hadErrors) {
+        taskHadErrors = true;
+        failedTokenIds.push(token.id);
+      }
       await sleep(2000);
     }
 
@@ -557,10 +588,17 @@ async function executeTaskUnlocked(task, runId, { source = "nas" } = {}) {
       runId,
       source,
     });
+    return { hadErrors: taskHadErrors, failedTokenIds };
   } finally {
     taskLease.release();
   }
 }
+
+failedTaskRetryScheduler = createFailedTaskRetryScheduler({
+  dataStore,
+  executeTask,
+  addLog,
+});
 
 async function logToDb(
   taskId,

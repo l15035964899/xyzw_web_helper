@@ -6,6 +6,10 @@ const server = await readFile(
   new URL("../render-backend/server.js", import.meta.url),
   "utf8",
 );
+const taskRetry = await readFile(
+  new URL("../render-backend/lib/taskRetry.js", import.meta.url),
+  "utf8",
+);
 const page = await readFile(
   new URL("../src/views/BatchDailyTasks.vue", import.meta.url),
   "utf8",
@@ -24,4 +28,14 @@ test("pure connection retry logic is removed from NAS task execution", () => {
   assert.doesNotMatch(server, /TOKEN_RETRY_DELAYS_MS/);
   assert.doesNotMatch(server, /shouldRetryTokenAttempt/);
   assert.doesNotMatch(server, /首轮执行结束/);
+});
+
+test("failed scheduled tasks use the delayed single-retry scheduler", () => {
+  assert.match(server, /createFailedTaskRetryScheduler/);
+  assert.match(server, /failedTokenIds\.push\(token\.id\)/);
+  assert.match(
+    taskRetry,
+    /source:\s*"nas-retry",\s*retryAttempt:\s*1/,
+  );
+  assert.match(server, /taskRetryScheduled/);
 });
