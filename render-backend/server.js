@@ -14,10 +14,7 @@ import cron from "node-cron";
 import { createApiKeyMiddleware } from "./lib/apiKeyAuth.js";
 import { createAppAuthMiddleware } from "./lib/appAuth.js";
 import { applyBatchSettingsToTask } from "./lib/batchSettings.js";
-import {
-  getNextCronRun,
-  previewCronExpression,
-} from "./lib/cronSchedule.js";
+import { getNextCronRun, previewCronExpression } from "./lib/cronSchedule.js";
 import { createDataStore } from "./lib/dataStore.js";
 import { GameClient } from "./lib/gameClient.js";
 import {
@@ -251,16 +248,15 @@ async function loadTokens() {
 const runningTasks = new Set();
 let failedTaskRetryScheduler = null;
 const tokenLockQueue = new TokenLockQueue();
-const manualLeaseManager = new ManualLeaseManager({ lockQueue: tokenLockQueue });
+const manualLeaseManager = new ManualLeaseManager({
+  lockQueue: tokenLockQueue,
+});
 const tokenRefreshManager = createTokenRefreshManager({
   dataStore,
   addLog,
 });
 
-async function executeTask(
-  task,
-  { source = "nas", retryAttempt = 0 } = {},
-) {
+async function executeTask(task, { source = "nas", retryAttempt = 0 } = {}) {
   if (!task?.id) throw new Error("任务缺少 id");
   if (runningTasks.has(task.id)) {
     addLog("WARN", "task", `任务正在执行，跳过重复调用: ${task.name}`, {
@@ -302,10 +298,7 @@ async function executeTask(
 }
 
 async function executeTaskUnlocked(task, runId, { source = "nas" } = {}) {
-  task = applyBatchSettingsToTask(
-    task,
-    await dataStore.getBatchSettings(),
-  );
+  task = applyBatchSettingsToTask(task, await dataStore.getBatchSettings());
   const addTaskRunLog = async (
     message,
     {
@@ -318,11 +311,7 @@ async function executeTaskUnlocked(task, runId, { source = "nas" } = {}) {
   ) => {
     const safeMessage = sanitizeLogMessage(message);
     addLog(
-      type === "error"
-        ? "ERROR"
-        : type === "warning"
-          ? "WARN"
-          : "INFO",
+      type === "error" ? "ERROR" : type === "warning" ? "WARN" : "INFO",
       "task",
       safeMessage,
       { taskId: task.id, tokenId: token?.id || null, source },
@@ -522,7 +511,13 @@ async function executeTaskUnlocked(task, runId, { source = "nas" } = {}) {
             : await client.executeBatch(taskDef.commands, 800);
 
           for (const result of cmdResults) {
-            const type = result.success ? "success" : "error";
+            const type = !result.success
+              ? "error"
+              : result.status === "warning"
+                ? "warning"
+                : result.status === "info"
+                  ? "info"
+                  : "success";
             if (!result.success) hadErrors = true;
             const detail =
               result.message ||
@@ -955,9 +950,7 @@ app.get("/api/token-refresh/status", async (req, res) => {
 app.post("/api/token-refresh/run", async (req, res) => {
   try {
     const result = await tokenRefreshManager.run({
-      tokenIds: Array.isArray(req.body?.token_ids)
-        ? req.body.token_ids
-        : null,
+      tokenIds: Array.isArray(req.body?.token_ids) ? req.body.token_ids : null,
       force: Boolean(req.body?.force),
     });
     res.json(result);

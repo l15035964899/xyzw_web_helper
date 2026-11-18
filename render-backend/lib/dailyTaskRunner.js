@@ -27,9 +27,27 @@ const DAILY_BOX_TYPES = {
   2005: "钻石宝箱",
 };
 
+const EXPECTED_DAILY_BUSINESS_SKIPS = {
+  1000020: "今日奖励已领取",
+  12000116: "今日免费奖励已领取",
+  1400010: "未购买月卡，跳过该礼包",
+  3500020: "当前没有可领取的奖励",
+};
+
 function normalizeBoxType(value, fallback = 2001) {
   const parsed = Number(value);
   return DAILY_BOX_TYPES[parsed] ? parsed : fallback;
+}
+
+function getExpectedDailySkipReason(cmd, error) {
+  const codes = new Set(String(error?.message || "").match(/-?\d+/g) || []);
+  if (cmd === "gacha_drawreward" && codes.has("400000")) {
+    return "当前不在免费扭蛋活动时间范围（服务器返回 [400000] 物品不存在）";
+  }
+  for (const [code, reason] of Object.entries(EXPECTED_DAILY_BUSINESS_SKIPS)) {
+    if (codes.has(code)) return `${reason}（服务器返回 [${code}]）`;
+  }
+  return null;
 }
 
 function getBoxQuantity(items, itemId) {
@@ -176,13 +194,10 @@ export class DailyTaskRunner {
         );
       return result;
     } catch (error) {
-      if (
-        cmd === "gacha_drawreward" &&
-        /\b400000\b/.test(error.message || "")
-      ) {
+      const expectedSkipReason = getExpectedDailySkipReason(cmd, error);
+      if (expectedSkipReason) {
         error.expectedSkip = true;
-        error.expectedSkipReason =
-          "当前不在免费扭蛋活动时间范围（服务器返回 [400000] 物品不存在）";
+        error.expectedSkipReason = expectedSkipReason;
         throw error;
       }
       if (description) {

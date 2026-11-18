@@ -717,8 +717,43 @@ test("an explicit unavailable-card response does not interrupt remaining daily t
       throw new Error("服务器错误: 1400010 - 没有购买月卡");
     return send(...args);
   };
-  await f.runner().run("account-a", {}, settings);
+  const result = await f.runner().run("account-a", {}, settings);
+  assert.equal(result.failed, 0);
   assert.equal(f.role.dailyTask.complete[6], -1);
+});
+
+test("expected claimed and unavailable rewards are warning skips", async () => {
+  const f = fixture();
+  const logs = [];
+  const expectedSkips = {
+    discount_claimreward: "服务器错误: 1000020 - 今天已经领取过奖励了",
+    collection_claimfreereward: "服务器错误: 12000116 - 今日已领取免费奖励",
+    card_claimreward: "服务器错误: 1400010 - 没有购买月卡",
+    activity_recyclewarorderrewardclaim:
+      "服务器错误: 3500020 - 没有可领取的奖励",
+  };
+  const send = f.store.sendMessageWithPromise;
+  f.store.sendMessageWithPromise = async (...args) => {
+    if (expectedSkips[args[1]]) throw new Error(expectedSkips[args[1]]);
+    return send(...args);
+  };
+  const result = await f
+    .runner()
+    .run("account-a", { onLog: (log) => logs.push(log) }, settings);
+  assert.equal(result.failed, 0);
+  assert.equal(result.incomplete, 0);
+  for (const code of ["1000020", "12000116", "1400010", "3500020"]) {
+    assert.ok(
+      logs.some(
+        (log) => log.type === "warning" && log.message.includes(`[${code}]`),
+      ),
+    );
+    assert.ok(
+      !logs.some(
+        (log) => log.type === "error" && log.message.includes(`[${code}]`),
+      ),
+    );
+  }
 });
 
 test("box business error 400122 fails only that task and leaves it pending on the server", async () => {
@@ -816,7 +851,7 @@ test("pending counts include distinct supplemental failures without counting a f
     return send(...args);
   };
   const result = await f.runner().run("account-a", {}, settings);
-  assert.equal(result.failed, 2);
+  assert.equal(result.failed, 1);
   assert.equal(result.remainingTasks, 1);
-  assert.equal(result.incomplete, 2);
+  assert.equal(result.incomplete, 1);
 });
