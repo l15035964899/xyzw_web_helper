@@ -731,6 +731,7 @@ test("expected claimed and unavailable rewards are warning skips", async () => {
     card_claimreward: "服务器错误: 1400010 - 没有购买月卡",
     activity_recyclewarorderrewardclaim:
       "服务器错误: 3500020 - 没有可领取的奖励",
+    dungeon_selecthero: "服务器错误: 2600040 - 已经选择过上阵咸将了",
   };
   const send = f.store.sendMessageWithPromise;
   f.store.sendMessageWithPromise = async (...args) => {
@@ -742,7 +743,7 @@ test("expected claimed and unavailable rewards are warning skips", async () => {
     .run("account-a", { onLog: (log) => logs.push(log) }, settings);
   assert.equal(result.failed, 0);
   assert.equal(result.incomplete, 0);
-  for (const code of ["1000020", "12000116", "1400010", "3500020"]) {
+  for (const code of ["1000020", "12000116", "1400010", "3500020", "2600040"]) {
     assert.ok(
       logs.some(
         (log) => log.type === "warning" && log.message.includes(`[${code}]`),

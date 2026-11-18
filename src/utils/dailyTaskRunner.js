@@ -32,6 +32,7 @@ const EXPECTED_DAILY_BUSINESS_SKIPS = {
   12000116: "今日免费奖励已领取",
   1400010: "未购买月卡，跳过该礼包",
   3500020: "当前没有可领取的奖励",
+  2600040: "咸王梦境阵容已选择",
 };
 
 function normalizeBoxType(value, fallback = 2001) {
