@@ -167,6 +167,15 @@ export class DailyTaskRunner {
         );
       return result;
     } catch (error) {
+      if (
+        cmd === "gacha_drawreward" &&
+        /\b400000\b/.test(error.message || "")
+      ) {
+        error.expectedSkip = true;
+        error.expectedSkipReason =
+          "当前不在免费扭蛋活动时间范围（服务器返回 [400000] 物品不存在）";
+        throw error;
+      }
       if (description) {
         const token = this.tokenStore.gameTokens.find((t) => t.id === tokenId);
         const tokenName = token?.name || tokenId;
@@ -1076,6 +1085,17 @@ export class DailyTaskRunner {
           await this.sleep(this.delaySettings.taskDelay);
         } catch (error) {
           if (error.interrupted) throw error;
+          if (error.expectedSkip) {
+            summary.skipped++;
+            const token = this.tokenStore.gameTokens.find(
+              (entry) => entry.id === tokenId,
+            );
+            this.log(
+              `[${token?.name || tokenId}] ${task.name} - 跳过: ${error.expectedSkipReason}`,
+              "warning",
+            );
+            continue;
+          }
           summary.failed++;
           if (this.activeCondition === undefined) supplementalIncomplete++;
           this.log(`任务执行失败: ${task.name} - ${error.message}`, "error");

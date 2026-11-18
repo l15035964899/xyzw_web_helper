@@ -424,6 +424,53 @@ test("server-claimed sign-in, cards and free gacha are not requested again", asy
   );
 });
 
+test("missing free gacha activity is a warning skip, not an error", async () => {
+  const f = fixture();
+  const stamp = f.role.dailyTask.dailyTime - 10;
+  f.role.statistics["gacha:free"] = stamp;
+  const logs = [];
+  const send = f.store.sendMessageWithPromise;
+  f.store.sendMessageWithPromise = async (...args) => {
+    if (args[1] === "gacha_drawreward") throw new Error("[400000] 物品不存在");
+    return send(...args);
+  };
+  const result = await f
+    .runner()
+    .run(
+      "account-a",
+      { onLog: (log) => logs.push(log) },
+      { ...settings, freeGachaEnable: true },
+    );
+  assert.equal(result.failed, 0);
+  assert.equal(result.incomplete, 0);
+  assert.ok(
+    logs.some(
+      (log) =>
+        log.type === "warning" &&
+        log.message.includes("免费扭蛋 - 跳过") &&
+        log.message.includes("不在免费扭蛋活动时间范围"),
+    ),
+  );
+  assert.ok(
+    !logs.some(
+      (log) => log.type === "error" && log.message.includes("免费扭蛋"),
+    ),
+  );
+});
+
+test("other item 400000 responses remain business errors", async () => {
+  const f = fixture({ 7: 0 });
+  f.role.items = { 2005: { quantity: 5 } };
+  const send = f.store.sendMessageWithPromise;
+  f.store.sendMessageWithPromise = async (...args) => {
+    if (args[1] === "item_openbox")
+      throw new Error("服务器错误: 400000 - 物品不存在");
+    return send(...args);
+  };
+  const result = await f.runner().run("account-a", {}, settings);
+  assert.equal(result.failed, 1);
+});
+
 test("daily boxes prefer diamonds when at least three are available", async () => {
   const f = fixture({ 7: 0 });
   f.role.items = { 2005: { quantity: 5 }, 2003: { quantity: 100 } };
@@ -509,10 +556,14 @@ test("daily black market falls back to the NAS list after an empty purchase", as
     return send(...args);
   };
 
-  await f.runner().run("account-a", {}, {
-    ...settings,
-    blackMarketPurchaseList: configured,
-  });
+  await f.runner().run(
+    "account-a",
+    {},
+    {
+      ...settings,
+      blackMarketPurchaseList: configured,
+    },
+  );
 
   assert.equal(purchases, 2);
   assert.equal(JSON.stringify(writtenList), JSON.stringify(configured));
