@@ -32,6 +32,11 @@ function normalizeBoxType(value, fallback = 2001) {
   return DAILY_BOX_TYPES[parsed] ? parsed : fallback;
 }
 
+function getBoxQuantity(items, itemId) {
+  const quantity = Number(items?.[itemId]?.quantity);
+  return Number.isFinite(quantity) && quantity > 0 ? Math.trunc(quantity) : 0;
+}
+
 function normalizeBlackMarketPurchaseList(value) {
   if (!Array.isArray(value)) return [];
   const seen = new Set();
@@ -630,21 +635,23 @@ export class DailyTaskRunner {
         name: `开启${boxName}`,
         condition: 7,
         execute: async () => {
-          this.log(
-            `开箱策略：钻石宝箱库存 ${boxPlan.diamondQuantity} 个，任务需要 ${boxPlan.count} 个，选择${boxName}${boxPlan.fallback ? "兜底" : "优先"}`,
-          );
-          let remaining = boxPlan.count;
-          while (remaining > 0) {
-            const batch = Math.min(10, remaining);
-            await this.executeGameCommand(
-              tokenId,
-              "item_openbox",
-              { itemId: boxPlan.itemId, number: batch },
-              `开启${boxName}${batch}个`,
-            );
-            remaining -= batch;
+          const available = getBoxQuantity(roleData.items, boxPlan.itemId);
+          // The game accepts the visible batch size: the whole stack up to ten.
+          const openCount = Math.min(10, available);
+          if (openCount < 1) {
+            this.log(`${boxName}库存不足，保留开箱任务待下次继续`, "warning");
+            return false;
           }
-          return true;
+          this.log(
+            `开箱策略：钻石宝箱库存 ${boxPlan.diamondQuantity} 个，任务需要 ${boxPlan.count} 个，选择${boxName}${boxPlan.fallback ? "兜底" : "优先"}；按界面最大可选数量开启 ${openCount} 个`,
+          );
+          await this.executeGameCommand(
+            tokenId,
+            "item_openbox",
+            { itemId: boxPlan.itemId, number: openCount },
+            `开启${boxName}${openCount}个`,
+          );
+          return openCount >= boxPlan.count;
         },
       });
     }

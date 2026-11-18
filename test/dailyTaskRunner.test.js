@@ -69,6 +69,9 @@ function fixture(progress = {}) {
       weekPoint: 0,
       weekReward: {},
     },
+    items: {
+      2001: { itemId: 2001, quantity: 100 },
+    },
     statistics: {
       "artifact:normal:lottery:time": 1700000010,
       "genie:sweep:buy": 3,
@@ -155,11 +158,11 @@ test("completed-but-unclaimed tasks only claim their configured task IDs", async
   );
 });
 
-test("partial progress opens only the remaining daily boxes", async () => {
+test("partial progress uses the interface maximum even when fewer boxes are required", async () => {
   const f = fixture({ 6: 2, 7: 2 });
   const result = await f.runner().run("account-a", {}, settings);
   assert.equal(f.calls.filter((c) => c.cmd === "system_buygold").length, 1);
-  assert.equal(f.calls.find((c) => c.cmd === "item_openbox").params.number, 1);
+  assert.equal(f.calls.find((c) => c.cmd === "item_openbox").params.number, 10);
   assert.equal(result.deferred, 0);
 });
 
@@ -478,7 +481,7 @@ test("daily boxes prefer diamonds when at least three are available", async () =
   const boxCalls = f.calls.filter((call) => call.cmd === "item_openbox");
   assert.deepEqual(
     boxCalls.map((call) => [call.params.itemId, call.params.number]),
-    [[2005, 3]],
+    [[2005, 5]],
   );
 });
 
@@ -489,8 +492,23 @@ test("daily boxes fall back to the configured type below three diamonds", async 
   const boxCalls = f.calls.filter((call) => call.cmd === "item_openbox");
   assert.deepEqual(
     boxCalls.map((call) => [call.params.itemId, call.params.number]),
-    [[2003, 3]],
+    [[2003, 10]],
   );
+});
+
+test("daily boxes use the full current stack when it is below ten", async () => {
+  for (const [quantity, expected] of [
+    [3, 3],
+    [9, 9],
+    [11, 10],
+  ]) {
+    const f = fixture({ 7: 0 });
+    f.role.items = { 2005: { itemId: 2005, quantity } };
+    await f.runner().run("account-a", {}, settings);
+    const boxCall = f.calls.find((call) => call.cmd === "item_openbox");
+    assert.equal(boxCall.params.itemId, 2005);
+    assert.equal(boxCall.params.number, expected);
+  }
 });
 
 test("daily diamond fallback uses wood when diamonds are also the default", () => {
@@ -711,7 +729,7 @@ test("box business error 400122 fails only that task and leaves it pending on th
     if (args[1] === "item_openbox") {
       boxRequests++;
       assert.equal(args[2].itemId, 2001);
-      assert.equal(args[2].number, 3);
+      assert.equal(args[2].number, 10);
       throw new Error("服务器错误: 400122 - 未知错误");
     }
     return send(...args);
