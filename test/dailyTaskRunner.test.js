@@ -546,46 +546,57 @@ test("daily black market keeps the game configuration when purchase succeeds", a
   );
 });
 
-test("daily black market falls back to the NAS list after an empty purchase", async () => {
+test("daily black market buys one platinum box after an empty purchase", async () => {
   const f = fixture({ 12: 0 });
-  const configured = [
-    { itemId: 1012, discount: 7 },
-    { itemId: 2004, discount: 10 },
-  ];
-  let serverList = [{ itemId: 2002, discount: 2 }];
   let purchases = 0;
-  let writtenList = null;
+  let manualBuys = 0;
   const send = f.store.sendMessageWithPromise;
   f.store.sendMessageWithPromise = async (...args) => {
     const [, cmd, params] = args;
     if (cmd === "store_purchase") {
       purchases += 1;
-      if (purchases >= 2) f.role.dailyTask.complete[12] = 1;
       return {};
     }
-    if (cmd === "store_getpurchase") {
-      return { purchaseCnt: 1, purchaseItemList: serverList };
-    }
-    if (cmd === "store_setpurchase") {
-      serverList = params.purchaseItemList;
-      writtenList = params.purchaseItemList;
+    if (cmd === "store_buy") {
+      manualBuys += 1;
+      assert.equal(params.goodsId, 3);
+      f.role.dailyTask.complete[12] = 1;
       return {};
     }
     return send(...args);
   };
 
-  await f.runner().run(
-    "account-a",
-    {},
-    {
-      ...settings,
-      blackMarketPurchaseList: configured,
-    },
-  );
+  await f.runner().run("account-a", {}, settings);
 
-  assert.equal(purchases, 2);
-  assert.equal(JSON.stringify(writtenList), JSON.stringify(configured));
+  assert.equal(purchases, 1);
+  assert.equal(manualBuys, 1);
+  assert.equal(
+    f.calls.filter((call) => call.cmd === "store_getpurchase").length,
+    0,
+  );
+  assert.equal(
+    f.calls.filter((call) => call.cmd === "store_setpurchase").length,
+    0,
+  );
   assert.equal(f.role.dailyTask.complete[12], -1);
+});
+
+test("daily black market never rewrites purchase settings when manual buy is insufficient", async () => {
+  const f = fixture({ 12: 0 });
+  const send = f.store.sendMessageWithPromise;
+  f.store.sendMessageWithPromise = async (...args) => {
+    if (["store_purchase", "store_buy"].includes(args[1])) return {};
+    return send(...args);
+  };
+
+  const result = await f.runner().run("account-a", {}, settings);
+
+  assert.equal(result.failed, 0);
+  assert.equal(result.remainingTasks, 1);
+  assert.equal(
+    f.calls.filter((call) => call.cmd === "store_setpurchase").length,
+    0,
+  );
 });
 
 test("a failed formation query never triggers a forced switch", async () => {

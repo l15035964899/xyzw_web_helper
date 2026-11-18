@@ -76,9 +76,7 @@
               >
                 同步账号
               </n-button>
-              <n-button size="small" @click="exportConfig">
-                导出配置
-              </n-button>
+              <n-button size="small" @click="exportConfig"> 导出配置 </n-button>
               <n-upload
                 :show-file-list="false"
                 accept=".json"
@@ -968,9 +966,9 @@
                   size="small"
                   @click="
                     () => {
-                      const groupTokenIds = getValidGroupTokenIds(
-                        group.id,
-                      ).map(scheduleTokenValue);
+                      const groupTokenIds = getValidGroupTokenIds(group.id).map(
+                        scheduleTokenValue,
+                      );
                       groupTokenIds.forEach((id) => {
                         if (!selectedTokensForApply.includes(id)) {
                           selectedTokensForApply.push(id);
@@ -1685,6 +1683,8 @@
           这里保存的是要下发到游戏服务器的黑市采购清单。每条填写 `itemId`
           和折扣，折扣范围
           1-10；保存后需手动执行“一键配置黑市清单”才会真正写入服务器。
+          日常任务不会自动使用或替换这份清单；一键采购未完成时会改为手动购买 1
+          个铂金宝箱。
         </n-alert>
 
         <div style="display: flex; gap: 12px; margin-bottom: 12px">
@@ -1811,7 +1811,10 @@
                 <span class="task-name">{{ task.name }}</span>
               </td>
               <td class="task-schedule-cell">
-                <n-tag size="small" :type="task.runType === 'daily' ? 'info' : 'default'">
+                <n-tag
+                  size="small"
+                  :type="task.runType === 'daily' ? 'info' : 'default'"
+                >
                   {{ task.runType === "daily" ? "每天" : "Cron" }}
                 </n-tag>
                 <code>
@@ -1833,7 +1836,8 @@
                 }}
               </td>
               <td>
-                {{ task.selectedTokens.length }} / {{ task.selectedTasks.length }}
+                {{ task.selectedTokens.length }} /
+                {{ task.selectedTasks.length }}
               </td>
               <td>
                 <n-switch
@@ -1904,9 +1908,7 @@
             共 {{ serverAccounts.length }} 个账号，定时任务使用 NAS 账号 ID。
           </n-text>
           <n-space>
-            <n-button size="small" @click="loadServerAccounts">
-              刷新
-            </n-button>
+            <n-button size="small" @click="loadServerAccounts"> 刷新 </n-button>
             <n-button
               size="small"
               type="primary"
@@ -3154,10 +3156,7 @@ import {
 import { DailyTaskRunner } from "@/utils/dailyTaskRunner";
 import { goldItemsConfig, merchantConfig } from "@/utils/dreamConstants";
 import { isSameGameValue } from "@/utils/gameValue.js";
-import {
-  ensureManualLease,
-  releaseManualLease,
-} from "@/utils/manualLease";
+import { ensureManualLease, releaseManualLease } from "@/utils/manualLease";
 import { readNasTokenIdMap } from "@/utils/nasTokenBootstrap";
 import {
   getScheduleTokenValue,
@@ -4086,7 +4085,9 @@ function scheduleFingerprint(task) {
   const cron =
     task.runType === "daily"
       ? `daily:${task.runTime}`
-      : `cron:${String(task.cronExpression || "").trim().replace(/\s+/g, " ")}`;
+      : `cron:${String(task.cronExpression || "")
+          .trim()
+          .replace(/\s+/g, " ")}`;
   return JSON.stringify([
     cron,
     [...(task.selectedTasks || [])].sort(),
@@ -4110,7 +4111,9 @@ const migrateLegacyScheduledTasks = async () => {
     existing.map((task) => task.legacyId).filter(Boolean),
   );
   const fingerprints = new Set(existing.map(scheduleFingerprint));
-  const serverIds = new Set(serverAccounts.value.map((account) => String(account.id)));
+  const serverIds = new Set(
+    serverAccounts.value.map((account) => String(account.id)),
+  );
   let imported = 0;
   let skipped = 0;
   let failed = 0;
@@ -4572,9 +4575,7 @@ const importConfig = async ({ file }) => {
         if (Array.isArray(importData.scheduledTasks)) {
           let staged = [];
           try {
-            staged = JSON.parse(
-              localStorage.getItem("scheduledTasks") || "[]",
-            );
+            staged = JSON.parse(localStorage.getItem("scheduledTasks") || "[]");
           } catch {
             staged = [];
           }
@@ -4597,8 +4598,7 @@ const importConfig = async ({ file }) => {
             Number(importData.batchSettings.weirdTowerMaxClimb) ||
             weirdTowerMaxClimb.value;
           giftQuantity.value =
-            Number(importData.batchSettings.giftQuantity) ||
-            giftQuantity.value;
+            Number(importData.batchSettings.giftQuantity) || giftQuantity.value;
           batchSettings.blackMarketPurchaseList =
             normalizeBlackMarketPurchaseList(
               batchSettings.blackMarketPurchaseList?.length
@@ -5537,13 +5537,10 @@ const applyTemplate = async () => {
         ...template.settings,
         templateId: template.id,
       };
-      await requestBatchServer(
-        `/api/tokens/${encodeURIComponent(serverId)}`,
-        {
-          method: "PATCH",
-          body: { daily_settings: accountSettings },
-        },
-      );
+      await requestBatchServer(`/api/tokens/${encodeURIComponent(serverId)}`, {
+        method: "PATCH",
+        body: { daily_settings: accountSettings },
+      });
       localStorage.setItem(
         `daily-settings:${tokenId}`,
         JSON.stringify(accountSettings),
@@ -5555,9 +5552,7 @@ const applyTemplate = async () => {
   }
 
   if (failedCount) {
-    message.warning(
-      `模板已应用 ${successCount} 个账号，${failedCount} 个失败`,
-    );
+    message.warning(`模板已应用 ${successCount} 个账号，${failedCount} 个失败`);
   } else {
     message.success(`已成功应用模板到 ${successCount} 个账号`);
   }
@@ -6151,9 +6146,8 @@ const ensureConnection = async (
     throw new Error(`Token not found: ${tokenId}`);
   }
 
-  const leaseTokenIds = (selectedTokens.value.length
-    ? selectedTokens.value
-    : [tokenId]
+  const leaseTokenIds = (
+    selectedTokens.value.length ? selectedTokens.value : [tokenId]
   )
     .map((id) => {
       const token = tokens.value.find((item) => item.id === id);
