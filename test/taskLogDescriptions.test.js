@@ -31,8 +31,12 @@ test("known and unknown game errors are expanded for reusable log displays", () 
     "挂机奖励领取过于频繁（错误码 12400000）",
   );
   assert.equal(
+    explainLogError("[12400160] 未知错误"),
+    "请先开始功法残卷收集（错误码 12400160）",
+  );
+  assert.equal(
     explainLogError("[800040] 未知错误"),
-    "游戏服务器未返回具体原因，请稍后重试并确认该操作状态（错误码 800040）",
+    "没有可领取的挂机奖励（错误码 800040）",
   );
   assert.equal(
     explainLogError("[200750] 未知错误"),
@@ -45,5 +49,13 @@ test("known and unknown game errors are expanded for reusable log displays", () 
       message: "[12400000] 挂机奖励领取过于频繁",
     }),
     "执行失败：领取功法挂机奖励（legacy_claimhangup）；挂机奖励领取过于频繁（错误码 12400000）",
+  );
+  assert.equal(
+    formatLogMessage({
+      task_type: "legacy_beginhangup",
+      status: "success",
+      message: null,
+    }),
+    "执行成功：开始收集功法残卷（legacy_beginhangup）",
   );
 });
