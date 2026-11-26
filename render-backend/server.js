@@ -32,9 +32,31 @@ import {
 import { getMaintenanceDelay } from "./lib/maintenanceWindow.js";
 import { ManualLeaseManager } from "./lib/manualLeaseManager.js";
 import { createNativeTaskDefinitions } from "./lib/nativeBatchTasks.js";
-import { createFailedTaskRetryScheduler } from "./lib/taskRetry.js";
+import {
+  getArenaFormationMap,
+  NightmareRunner,
+} from "./lib/nightmareRunner.js";
+import {
+  getNightmareTeam,
+  getNightmareTeamAccountIds,
+  nightmareMemberMatchesRole,
+  validateNightmareSettings,
+  validateNightmareTeam,
+} from "./lib/nightmareSettings.js";
+import {
+  expectedRoleIdFromToken,
+  findDuplicateExpectedRoles,
+  verifyTokenRoleIdentity,
+} from "./lib/roleIdentity.js";
+import {
+  createFailedTaskRetryScheduler,
+  DEFERRED_LEGACY_FOLLOWUP_DELAY_MS,
+} from "./lib/taskRetry.js";
 import { TokenLockQueue } from "./lib/tokenLockQueue.js";
-import { createTokenRefreshManager } from "./lib/tokenRefresh.js";
+import {
+  createTokenRefreshManager,
+  refreshCredentialAndUpdateToken,
+} from "./lib/tokenRefresh.js";
 
 dotenv.config();
 process.env.TZ = process.env.TZ || "Asia/Shanghai";
@@ -244,6 +266,183 @@ async function loadTokens() {
   }
 }
 
+function parseTaskKeys(task) {
+  let taskKeys = task?.selected_tasks;
+  if (typeof taskKeys === "string") {
+    try {
+      taskKeys = JSON.parse(taskKeys);
+    } catch {
+      taskKeys = [];
+    }
+  }
+  if ((!Array.isArray(taskKeys) || taskKeys.length === 0) && task?.task_type) {
+    taskKeys = [task.task_type];
+  }
+  return Array.isArray(taskKeys) ? taskKeys : [];
+}
+
+function gameClientForToken(token) {
+  let tokenData;
+  try {
+    tokenData =
+      typeof token.token === "string" && token.token.startsWith("{")
+        ? JSON.parse(token.token)
+        : {
+            roleToken: token.token,
+            roleId: token.roleId,
+            sessId: token.sessId,
+            connId: token.connId,
+            isRestore: token.isRestore,
+          };
+  } catch (error) {
+    throw new Error(`Token解析失败: ${token.name} (${error.message})`);
+  }
+  tokenData.name = token.name;
+  return new GameClient(tokenData, token.ws_url);
+}
+
+function disconnectNightmareClients(clients) {
+  for (const client of clients?.values?.() || []) {
+    try {
+      client.disconnect();
+    } catch {
+      // Best effort during cleanup.
+    }
+  }
+}
+
+async function connectNightmareClients(
+  tokens,
+  { addTaskRunLog, runId, source },
+) {
+  const clients = new Map();
+  const tokensById = new Map(tokens.map((token) => [String(token.id), token]));
+  const connectionResults = await Promise.allSettled(
+    tokens.map(async (token) => {
+      const client = gameClientForToken(token);
+      await client.connect(15_000);
+      return { token, client };
+    }),
+  );
+  for (const result of connectionResults) {
+    if (result.status === "fulfilled") {
+      clients.set(String(result.value.token.id), result.value.client);
+    }
+  }
+  const failed = tokens.filter((token) => !clients.has(String(token.id)));
+  if (failed.length > 0) {
+    disconnectNightmareClients(clients);
+    throw new Error(
+      `以下账号连接失败：${failed.map((token) => token.name).join("、")}`,
+    );
+  }
+
+  const seenRoles = new Map();
+  try {
+    for (const token of tokens) {
+      let activeToken = token;
+      let client = clients.get(String(token.id));
+      let response = await client.sendWithPromise(
+        "role_getroleinfo",
+        {},
+        12_000,
+      );
+      let identity;
+      try {
+        identity = verifyTokenRoleIdentity(activeToken, response);
+      } catch (error) {
+        if (!error.roleIdentityMismatch) throw error;
+        await addTaskRunLog?.(
+          `${activeToken.name}: 角色身份异常，正在使用 NAS BIN 自动修复`,
+          {
+            type: "warning",
+            taskType: "roleIdentity",
+            token: activeToken,
+            runId,
+            source,
+          },
+        );
+        client.disconnect();
+        clients.delete(String(activeToken.id));
+        activeToken = await repairTokenIdentityFromCredential(activeToken);
+        tokensById.set(String(activeToken.id), activeToken);
+        client = gameClientForToken(activeToken);
+        await client.connect(15_000);
+        clients.set(String(activeToken.id), client);
+        response = await client.sendWithPromise("role_getroleinfo", {}, 12_000);
+        identity = verifyTokenRoleIdentity(activeToken, response);
+      }
+      if (!identity.checked) continue;
+      const duplicate = seenRoles.get(identity.actualRoleId);
+      if (duplicate) {
+        throw new Error(
+          `${activeToken.name} 实际角色 ${identity.actualRoleId} 与 ${duplicate.name} 重复`,
+        );
+      }
+      seenRoles.set(identity.actualRoleId, activeToken);
+      await dataStore
+        .updateToken?.(activeToken.id, {
+          expected_role_id: identity.expectedRoleId,
+          last_verified_role_id: identity.actualRoleId,
+          role_identity_verified_at: new Date().toISOString(),
+          role_identity_error: null,
+        })
+        .catch(() => {});
+      await addTaskRunLog?.(
+        `${activeToken.name}: 角色身份校验通过（${identity.actualRoleId}）`,
+        {
+          type: "success",
+          taskType: "roleIdentity",
+          token: activeToken,
+          runId,
+          source,
+        },
+      );
+    }
+    return { clients, tokensById };
+  } catch (error) {
+    disconnectNightmareClients(clients);
+    throw error;
+  }
+}
+
+async function verifyRefreshedGameToken(token, refreshed) {
+  if (!expectedRoleIdFromToken(token)) {
+    return { checked: false, expectedRoleId: null, actualRoleId: null };
+  }
+  let tokenData;
+  try {
+    tokenData = JSON.parse(refreshed.token);
+  } catch {
+    throw new Error("刷新后的 Token 格式无效，无法校验角色身份");
+  }
+  tokenData.name = token.name;
+  const client = new GameClient(tokenData, token.ws_url);
+  try {
+    await client.connect(15000);
+    const response = await client.sendWithPromise("role_getroleinfo", {}, 8000);
+    return verifyTokenRoleIdentity(token, response);
+  } finally {
+    client.disconnect();
+  }
+}
+
+async function repairTokenIdentityFromCredential(token) {
+  const credential = await dataStore.getTokenRefreshCredential?.(token.id);
+  if (!credential?.bin) {
+    const error = new Error("NAS 没有保存该账号可用于自动修复的 BIN");
+    error.code = "MISSING_REFRESH_CREDENTIAL";
+    throw error;
+  }
+  const repaired = await refreshCredentialAndUpdateToken({
+    token,
+    credential,
+    dataStore,
+    verifyRefreshedToken: verifyRefreshedGameToken,
+  });
+  return repaired.updated;
+}
+
 // ==================== 任务执行引擎 ====================
 const runningTasks = new Set();
 let failedTaskRetryScheduler = null;
@@ -254,6 +453,7 @@ const manualLeaseManager = new ManualLeaseManager({
 const tokenRefreshManager = createTokenRefreshManager({
   dataStore,
   addLog,
+  verifyRefreshedToken: verifyRefreshedGameToken,
 });
 
 async function executeTask(task, { source = "nas", retryAttempt = 0 } = {}) {
@@ -429,10 +629,35 @@ async function executeTaskUnlocked(task, runId, { source = "nas" } = {}) {
     source,
   });
 
+  const duplicateRoleGroups = findDuplicateExpectedRoles(targetTokens);
+  const blockedByDuplicate = new Set(
+    duplicateRoleGroups.flatMap(({ tokens: duplicates }) =>
+      duplicates.map((token) => token.id),
+    ),
+  );
+  if (duplicateRoleGroups.length > 0) {
+    await addTaskRunLog(
+      duplicateRoleGroups
+        .map(
+          ({ roleId, tokens: duplicates }) =>
+            `检测到重复角色 ${roleId}：${duplicates.map((token) => token.name).join("、")}`,
+        )
+        .join("；"),
+      {
+        type: "error",
+        taskType: "roleIdentity",
+        runId,
+        source,
+      },
+    );
+  }
+
   let taskHadErrors = false;
   const failedTokenIds = [];
+  const deferredTokenIds = [];
+  const seenActualRoles = new Map();
   let queued = false;
-  const taskLease = await tokenLockQueue.acquireAll(
+  let taskLease = await tokenLockQueue.acquireAll(
     targetTokens.map((token) => token.id),
     task.id,
     {
@@ -454,7 +679,42 @@ async function executeTaskUnlocked(task, runId, { source = "nas" } = {}) {
     });
   }
 
-  const runTokenAttempt = async (token) => {
+  const refreshSummary = await tokenRefreshManager.run({
+    tokenIds: targetTokens.map((token) => token.id),
+  });
+  if (
+    refreshSummary.refreshed ||
+    refreshSummary.failed ||
+    refreshSummary.missingCredentials
+  ) {
+    await addTaskRunLog(
+      `Token 预检查：自动刷新 ${refreshSummary.refreshed}，缺少 BIN 凭据 ${refreshSummary.missingCredentials}，失败 ${refreshSummary.failed}`,
+      {
+        type: refreshSummary.failed ? "warning" : "info",
+        taskType: "tokenRefresh",
+        runId,
+        source,
+      },
+    );
+  }
+
+  const runTokenAttempt = async (
+    token,
+    { allowAutomaticRepair = true } = {},
+  ) => {
+    if (blockedByDuplicate.has(token.id)) {
+      await addTaskRunLog(
+        `${token.name}: 该账号与其他 Token 绑定到同一预期角色，已阻止执行`,
+        {
+          type: "error",
+          taskType: "roleIdentity",
+          token,
+          runId,
+          source,
+        },
+      );
+      return { hadErrors: true, deferred: false };
+    }
     let tokenData;
     try {
       tokenData =
@@ -490,10 +750,29 @@ async function executeTaskUnlocked(task, runId, { source = "nas" } = {}) {
 
     try {
       await client.connect(15000);
+      const expectedRoleId = expectedRoleIdFromToken(token);
+      let roleResponse = null;
       try {
-        await client.sendWithPromise("role_getroleinfo", {}, 8000);
-        await sleep(500);
+        roleResponse = await client.sendWithPromise(
+          "role_getroleinfo",
+          {},
+          8000,
+        );
       } catch (e) {
+        if (expectedRoleId) {
+          hadErrors = true;
+          await addTaskRunLog(
+            `${token.name}: 获取角色信息失败，无法确认账号身份，已阻止执行 (${e.message})`,
+            {
+              type: "error",
+              taskType: "roleIdentity",
+              token,
+              runId,
+              source,
+            },
+          );
+          return { hadErrors: true, deferred: false };
+        }
         hadErrors = true;
         await addTaskRunLog(`${token.name}: 获取角色信息失败 (${e.message})`, {
           type: "warning",
@@ -503,6 +782,135 @@ async function executeTaskUnlocked(task, runId, { source = "nas" } = {}) {
           source,
         });
       }
+
+      if (roleResponse) {
+        let identity;
+        try {
+          identity = verifyTokenRoleIdentity(token, roleResponse);
+        } catch (error) {
+          if (error.roleIdentityMismatch && allowAutomaticRepair) {
+            await addTaskRunLog(
+              `${token.name}: 检测到角色身份异常，正在使用 NAS BIN 自动修复`,
+              {
+                type: "warning",
+                taskType: "roleIdentity",
+                token,
+                runId,
+                source,
+              },
+            );
+            client.disconnect();
+            try {
+              const repairedToken =
+                await repairTokenIdentityFromCredential(token);
+              await addTaskRunLog(
+                `${token.name}: 自动修复成功，角色已校正为 ${error.expectedRoleId}，继续执行任务`,
+                {
+                  type: "success",
+                  taskType: "roleIdentity",
+                  token: repairedToken,
+                  runId,
+                  source,
+                },
+              );
+              return await runTokenAttempt(repairedToken, {
+                allowAutomaticRepair: false,
+              });
+            } catch (repairError) {
+              hadErrors = true;
+              const repairMessage = `自动修复失败：${repairError.message}`;
+              await dataStore
+                .updateToken?.(token.id, {
+                  expected_role_id:
+                    expectedRoleIdFromToken(token) ??
+                    token.expected_role_id ??
+                    null,
+                  last_verified_role_id: null,
+                  role_identity_verified_at: null,
+                  role_identity_error: repairMessage,
+                })
+                .catch(() => {});
+              await addTaskRunLog(
+                `${token.name}: ${error.message}；${repairMessage}`,
+                {
+                  type: "error",
+                  taskType: "roleIdentity",
+                  token,
+                  runId,
+                  source,
+                },
+              );
+              return { hadErrors: true, deferred: false };
+            }
+          }
+          hadErrors = true;
+          await dataStore
+            .updateToken?.(token.id, {
+              expected_role_id:
+                expectedRoleIdFromToken(token) ??
+                token.expected_role_id ??
+                null,
+              last_verified_role_id: null,
+              role_identity_verified_at: null,
+              role_identity_error: error.message,
+            })
+            .catch(() => {});
+          await addTaskRunLog(`${token.name}: ${error.message}，已阻止执行`, {
+            type: "error",
+            taskType: "roleIdentity",
+            token,
+            runId,
+            source,
+          });
+          return { hadErrors: true, deferred: false };
+        }
+        if (identity.checked) {
+          const previousToken = seenActualRoles.get(identity.actualRoleId);
+          if (previousToken) {
+            hadErrors = true;
+            const duplicateMessage = `实际登录角色 ${identity.actualRoleId} 与 ${previousToken.name} 重复`;
+            await dataStore
+              .updateToken?.(token.id, {
+                expected_role_id: identity.expectedRoleId,
+                last_verified_role_id: identity.actualRoleId,
+                role_identity_verified_at: new Date().toISOString(),
+                role_identity_error: duplicateMessage,
+              })
+              .catch(() => {});
+            await addTaskRunLog(
+              `${token.name}: ${duplicateMessage}，已阻止执行`,
+              {
+                type: "error",
+                taskType: "roleIdentity",
+                token,
+                runId,
+                source,
+              },
+            );
+            return { hadErrors: true, deferred: false };
+          }
+          seenActualRoles.set(identity.actualRoleId, token);
+          await dataStore
+            .updateToken?.(token.id, {
+              expected_role_id: identity.expectedRoleId,
+              last_verified_role_id: identity.actualRoleId,
+              role_identity_verified_at: new Date().toISOString(),
+              role_identity_error: null,
+            })
+            .catch(() => {});
+          await addTaskRunLog(
+            `${token.name}: 角色身份校验通过（${identity.actualRoleId}）`,
+            {
+              type: "success",
+              taskType: "roleIdentity",
+              token,
+              runId,
+              source,
+            },
+          );
+        }
+      }
+      await sleep(500);
 
       for (const { key, taskDef } of taskDefinitions) {
         try {
@@ -519,6 +927,7 @@ async function executeTaskUnlocked(task, runId, { source = "nas" } = {}) {
                   ? "info"
                   : "success";
             if (!result.success) hadErrors = true;
+            if (result.deferred) deferred = true;
             const detail =
               result.message ||
               result.error ||
@@ -583,7 +992,7 @@ async function executeTaskUnlocked(task, runId, { source = "nas" } = {}) {
       runId,
       source,
     });
-    return { hadErrors: taskHadErrors, failedTokenIds };
+    return { hadErrors: taskHadErrors, failedTokenIds, deferredTokenIds };
   } finally {
     taskLease.release();
   }
@@ -957,7 +1366,16 @@ app.put("/api/tokens/:id/refresh-credential", async (req, res) => {
     );
     const refresh = await tokenRefreshManager.run({
       tokenIds: [req.params.id],
+      force: true,
     });
+    if (refresh.failed) {
+      return res.status(422).json({
+        ok: false,
+        error: "BIN 已保存，但刷新后的角色身份校验失败",
+        ...credential,
+        refresh,
+      });
+    }
     res.json({ ok: true, ...credential, refresh });
   } catch (error) {
     res.status(400).json({ error: error.message });

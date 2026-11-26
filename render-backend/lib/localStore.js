@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import { normalizeBatchSettings } from "./batchSettings.js";
+import { expectedRoleIdFromToken } from "./roleIdentity.js";
 
 function normalizeArray(value) {
   if (Array.isArray(value)) return value;
@@ -48,6 +49,16 @@ function normalizeToken(input = {}) {
     name: String(input.name || input.roleId || "未命名角色"),
     token,
     roleId: input.roleId ?? input.role_id ?? null,
+    expected_role_id:
+      input.expected_role_id ??
+      input.expectedRoleId ??
+      expectedRoleIdFromToken({ name: input.name }),
+    last_verified_role_id:
+      input.last_verified_role_id ?? input.lastVerifiedRoleId ?? null,
+    role_identity_verified_at:
+      input.role_identity_verified_at ?? input.roleIdentityVerifiedAt ?? null,
+    role_identity_error:
+      input.role_identity_error ?? input.roleIdentityError ?? null,
     sessId: input.sessId ?? input.sess_id ?? null,
     connId: input.connId ?? input.conn_id ?? null,
     isRestore: input.isRestore ?? input.is_restore ?? 0,

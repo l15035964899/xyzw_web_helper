@@ -125,10 +125,12 @@ test("local store keeps the newest token session and private BIN credentials", a
   const newer = older + 1000;
   const token = await store.createToken({
     id: "account-a",
-    name: "账号一",
+    name: "AIRUI-0-82539560",
     enabled: true,
+    roleId: 75758961,
     token: JSON.stringify({ roleToken: "initial", connId: newer }),
   });
+  assert.equal(token.expected_role_id, "82539560");
 
   await store.updateToken(token.id, {
     token: JSON.stringify({ roleToken: "stale", connId: older }),
@@ -165,10 +167,7 @@ test("local store keeps the newest token session and private BIN credentials", a
   const status = (await store.listTokenRefreshCredentialStatuses())[token.id];
   assert.equal(status.last_refresh_at, "2026-11-14T00:00:00.000Z");
 
-  const credentialFile = path.join(
-    directory,
-    "token-refresh-credentials.json",
-  );
+  const credentialFile = path.join(directory, "token-refresh-credentials.json");
   assert.equal((await fs.stat(credentialFile)).mode & 0o777, 0o600);
 
   await store.deleteToken(token.id);
