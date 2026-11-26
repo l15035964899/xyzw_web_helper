@@ -473,19 +473,33 @@ async function executeTask(task, { source = "nas", retryAttempt = 0 } = {}) {
     return true;
   } finally {
     runningTasks.delete(task.id);
-    if (retryAttempt === 0 && result?.failedTokenIds?.length) {
+    const failedTokenIds = result?.failedTokenIds || [];
+    const deferredTokenIds = result?.deferredTokenIds || [];
+    const retryTokenIds = [
+      ...new Set([...failedTokenIds, ...deferredTokenIds]),
+    ];
+    if (retryAttempt === 0 && retryTokenIds.length > 0) {
       const retry = failedTaskRetryScheduler?.schedule({
         task,
-        tokenIds: result.failedTokenIds,
+        tokenIds: retryTokenIds,
         source,
+        reason: failedTokenIds.length > 0 ? "retry" : "deferred",
+        delayMs:
+          failedTokenIds.length > 0
+            ? undefined
+            : DEFERRED_LEGACY_FOLLOWUP_DELAY_MS,
       });
       if (retry) {
+        const retryMessage =
+          failedTokenIds.length > 0
+            ? `${retry.tokenIds.length} 个失败账号将在`
+            : `${retry.tokenIds.length} 个账号已开始收集，将在`;
         void logToDb(
           task.id,
           null,
           "taskRetryScheduled",
           "info",
-          `${task.name}: ${retry.tokenIds.length} 个失败账号将在 ${new Date(retry.scheduledAt).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", hour12: false })} 自动重试一次`,
+          `${task.name}: ${retryMessage} ${new Date(retry.scheduledAt).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", hour12: false })} 自动${failedTokenIds.length > 0 ? "重试一次" : "领取"}`,
           { source: "nas-retry", level: "info" },
         ).catch((error) =>
           addLog("ERROR", "taskRetry", `记录重试计划失败: ${error.message}`, {
