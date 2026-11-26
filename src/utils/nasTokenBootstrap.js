@@ -1,7 +1,5 @@
-import {
-  loadServerConnection,
-  serverRequest,
-} from "@/api/serverTasks";
+import { loadServerConnection, serverRequest } from "@/api/serverTasks";
+import { expectedRoleIdFromToken } from "./roleIdentity.js";
 import { createBrowserTokenValue } from "./serverTaskToken.js";
 import { decodeLocalTokenPayload } from "./serverTokenSync.js";
 
@@ -24,8 +22,12 @@ function normalizeSettings(value) {
 function findLocalToken(tokens, account, roleId) {
   return (
     (roleId != null
-      ? tokens.find((token) => String(token.roleId) === String(roleId))
-      : null) || tokens.find((token) => token.id === account.id)
+      ? tokens.find(
+          (token) => expectedRoleIdFromToken(token) === String(roleId),
+        ) || tokens.find((token) => String(token.roleId) === String(roleId))
+      : null) ||
+    tokens.find((token) => token.serverAccountId === account.id) ||
+    tokens.find((token) => token.id === account.id)
   );
 }
 
@@ -48,16 +50,23 @@ export async function reconcileNasTokens({
     try {
       const parsed = decodeLocalTokenPayload(account.token);
       const roleId = account.roleId ?? parsed.roleId ?? null;
+      const expectedRoleId =
+        expectedRoleIdFromToken(account) ||
+        (roleId != null ? String(roleId) : null);
       const existing = findLocalToken(
         tokenStore.gameTokens,
         account,
-        roleId,
+        expectedRoleId,
       );
       const fields = {
         token: createBrowserTokenValue(parsed),
         wsUrl: account.ws_url || account.wsUrl || null,
         server: account.server || "",
         roleId,
+        expectedRoleId,
+        lastVerifiedRoleId: account.last_verified_role_id || null,
+        roleIdentityVerifiedAt: account.role_identity_verified_at || null,
+        roleIdentityError: account.role_identity_error || null,
         serverAccountId: account.id,
         nasSyncedAt: new Date().toISOString(),
         importMethod: "nas",

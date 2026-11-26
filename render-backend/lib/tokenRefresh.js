@@ -1,6 +1,7 @@
 import { Buffer } from "node:buffer";
 import { randomInt } from "node:crypto";
 import { getEnc, parse } from "./bonProtocol.js";
+import { expectedRoleIdFromToken } from "./roleIdentity.js";
 
 export const DEFAULT_TOKEN_REFRESH_MAX_AGE_MS = 20 * 60 * 60 * 1000;
 export const DEFAULT_TOKEN_REFRESH_DELAY_MS = 2500;
@@ -77,12 +78,59 @@ export async function refreshTokenFromBin(
   };
 }
 
+export async function refreshCredentialAndUpdateToken({
+  token,
+  credential,
+  dataStore,
+  refresh = refreshTokenFromBin,
+  verifyRefreshedToken = null,
+  now = Date.now,
+}) {
+  if (!credential?.bin) {
+    const error = new Error("缺少 BIN 自动刷新凭据");
+    error.code = "MISSING_REFRESH_CREDENTIAL";
+    throw error;
+  }
+  const refreshed = await refresh(credential.bin, { now });
+  const verification = verifyRefreshedToken
+    ? await verifyRefreshedToken(token, refreshed)
+    : null;
+  const updated = await dataStore.updateToken(token.id, {
+    token: refreshed.token,
+    roleId: refreshed.payload.roleId ?? token.roleId,
+    sessId: refreshed.payload.sessId,
+    connId: refreshed.payload.connId,
+    isRestore: refreshed.payload.isRestore,
+    last_refreshed_at: refreshed.refreshedAt,
+    token_refresh_source: "bin",
+    expected_role_id:
+      token.expected_role_id ??
+      token.expectedRoleId ??
+      expectedRoleIdFromToken(token),
+    last_verified_role_id: verification?.actualRoleId ?? null,
+    role_identity_verified_at: verification ? refreshed.refreshedAt : null,
+    role_identity_error: null,
+  });
+  return {
+    refreshed,
+    verification,
+    updated: updated || {
+      ...token,
+      token: refreshed.token,
+      connId: refreshed.payload.connId,
+      sessId: refreshed.payload.sessId,
+      isRestore: refreshed.payload.isRestore,
+    },
+  };
+}
+
 export function createTokenRefreshManager({
   dataStore,
   addLog = () => {},
   maxAgeMs = DEFAULT_TOKEN_REFRESH_MAX_AGE_MS,
   refreshDelayMs = DEFAULT_TOKEN_REFRESH_DELAY_MS,
   refresh = refreshTokenFromBin,
+  verifyRefreshedToken = null,
   now = Date.now,
   sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
 }) {
@@ -112,8 +160,9 @@ export function createTokenRefreshManager({
       for (let index = 0; index < candidates.length; index += 1) {
         const token = candidates[index];
         if (index > 0 && refreshDelayMs > 0) await sleep(refreshDelayMs);
-        const credential =
-          await dataStore.getTokenRefreshCredential?.(token.id);
+        const credential = await dataStore.getTokenRefreshCredential?.(
+          token.id,
+        );
         if (!credential?.bin) {
           summary.missingCredentials += 1;
           if (!missingCredentialWarnings.has(token.id)) {
@@ -129,15 +178,13 @@ export function createTokenRefreshManager({
         }
 
         try {
-          const refreshed = await refresh(credential.bin, { now });
-          await dataStore.updateToken(token.id, {
-            token: refreshed.token,
-            roleId: refreshed.payload.roleId ?? token.roleId,
-            sessId: refreshed.payload.sessId,
-            connId: refreshed.payload.connId,
-            isRestore: refreshed.payload.isRestore,
-            last_refreshed_at: refreshed.refreshedAt,
-            token_refresh_source: "bin",
+          const { refreshed } = await refreshCredentialAndUpdateToken({
+            token,
+            credential,
+            dataStore,
+            refresh,
+            verifyRefreshedToken,
+            now,
           });
           await dataStore.markTokenRefreshResult?.(token.id, {
             success: true,
@@ -153,6 +200,19 @@ export function createTokenRefreshManager({
           const attemptedAt = new Date(
             typeof now === "function" ? now() : now,
           ).toISOString();
+          if (error.roleIdentityMismatch) {
+            await dataStore
+              .updateToken?.(token.id, {
+                expected_role_id:
+                  token.expected_role_id ??
+                  token.expectedRoleId ??
+                  expectedRoleIdFromToken(token),
+                last_verified_role_id: null,
+                role_identity_verified_at: null,
+                role_identity_error: error.message,
+              })
+              .catch(() => {});
+          }
           await dataStore.markTokenRefreshResult?.(token.id, {
             success: false,
             attemptedAt,

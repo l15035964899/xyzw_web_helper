@@ -1,15 +1,22 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import * as stateHelpers from "../src/utils/dailyTaskState.js";
+import * as roleIdentity from "../src/utils/roleIdentity.js";
 import { loadModule } from "./helpers/loadModule.js";
 
 const { DailyTaskRunner } = await loadModule(
   new URL("../src/utils/dailyTaskRunner.js", import.meta.url),
-  { "@/utils/dailyTaskState": stateHelpers },
+  {
+    "@/utils/dailyTaskState": stateHelpers,
+    "@/utils/roleIdentity": roleIdentity,
+  },
 );
 const { selectDailyBox } = await loadModule(
   new URL("../render-backend/lib/dailyTaskRunner.js", import.meta.url),
-  { "./dailyTaskState.js": stateHelpers },
+  {
+    "./dailyTaskState.js": stateHelpers,
+    "./roleIdentity.js": roleIdentity,
+  },
 );
 const definitions = [
   [1, 1, 1],
@@ -156,6 +163,24 @@ test("completed-but-unclaimed tasks only claim their configured task IDs", async
       .map((c) => c.params.taskId),
     [6, 7, 9],
   );
+});
+
+test("daily task stops before writes when the live role does not match the account name", async () => {
+  const f = fixture({ 6: 2 });
+  f.role.roleId = 462554796;
+  f.store.gameTokens[0] = {
+    id: "account-a",
+    name: "AIRUI-0-82539560",
+  };
+
+  await assert.rejects(
+    f.runner().run("account-a", {}, settings),
+    (error) =>
+      error.code === "ROLE_IDENTITY_MISMATCH" &&
+      error.expectedRoleId === "82539560" &&
+      error.actualRoleId === "462554796",
+  );
+  assert.deepEqual(f.calls, [{ cmd: "role_getroleinfo" }]);
 });
 
 test("partial progress uses the interface maximum even when fewer boxes are required", async () => {

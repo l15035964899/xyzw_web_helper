@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import * as roleIdentity from "../src/utils/roleIdentity.js";
 import { loadModule } from "./helpers/loadModule.js";
 
 function storage() {
@@ -26,6 +27,7 @@ test("NAS accounts reconcile by roleId without duplicating local tokens", async 
       "./serverTokenSync.js": {
         decodeLocalTokenPayload: (value) => JSON.parse(value),
       },
+      "./roleIdentity.js": roleIdentity,
     },
     { localStorage },
   );
@@ -80,10 +82,9 @@ test("NAS accounts reconcile by roleId without duplicating local tokens", async 
   assert.equal(tokens[0].name, "本机名称");
   assert.equal(tokens[0].serverAccountId, "server-a");
   assert.equal(tokens[1].id, "server-b");
-  assert.deepEqual(
-    JSON.parse(localStorage.getItem("daily-settings:local-a")),
-    { arenaFormation: 4 },
-  );
+  assert.deepEqual(JSON.parse(localStorage.getItem("daily-settings:local-a")), {
+    arenaFormation: 4,
+  });
   assert.deepEqual(
     JSON.parse(localStorage.getItem("daily-settings:server-b")),
     { towerFormation: 3 },

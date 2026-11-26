@@ -32,7 +32,7 @@ declare interface TokenData {
   server: string;
   remark?: string; // 备注信息
   importMethod?:
-    "manual" | "bin" | "url" | "wxQrcode" | "mobile" | "wxForceLogout";
+    "manual" | "bin" | "url" | "wxQrcode" | "mobile" | "wxForceLogout" | "nas";
   sourceUrl?: string; // 当importMethod为url时，存储url链接
   avatar?: string; // 用户头像URL
   upgradedToPermanent?: boolean; // 是否升级为长期有效
@@ -41,6 +41,12 @@ declare interface TokenData {
   combUser?: Record<string, unknown>;
   serverId?: string | number;
   roleId?: string | number;
+  expectedRoleId?: string | number | null;
+  lastVerifiedRoleId?: string | number | null;
+  roleIdentityVerifiedAt?: string | null;
+  roleIdentityError?: string | null;
+  serverAccountId?: string;
+  nasSyncedAt?: string;
   roleIndex?: number;
 }
 

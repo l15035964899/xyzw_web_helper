@@ -5,6 +5,7 @@ import {
   loadDailyTaskConfig,
   runWithDailyTaskLock,
 } from "./dailyTaskState.js";
+import { verifyTokenRoleIdentity } from "./roleIdentity.js";
 
 const taskLabels = {
   1: "登录游戏",
@@ -328,6 +329,17 @@ export class DailyTaskRunner {
       );
       await this.sleep(this.delaySettings.commandDelay);
       this.throwIfInterrupted(tokenId);
+      const token = this.tokenStore.gameTokens?.find(
+        (entry) => entry.id === tokenId,
+      );
+      const identity = verifyTokenRoleIdentity(token, response);
+      if (identity.checked && this.verifiedRoleId !== identity.actualRoleId) {
+        this.verifiedRoleId = identity.actualRoleId;
+        this.log(
+          `角色身份校验通过：预期 ${identity.expectedRoleId}，实际 ${identity.actualRoleId}`,
+          "success",
+        );
+      }
       const role = response?.role;
       const states = getDailyTaskStates(role, this.taskConfig);
       if (
@@ -369,7 +381,7 @@ export class DailyTaskRunner {
       }
       return role;
     } catch (error) {
-      if (error.interrupted) throw error;
+      if (error.interrupted || error.roleIdentityMismatch) throw error;
       const failure = new Error(error.message || "读取服务器任务列表失败");
       failure.serverStateUnavailable = true;
       throw failure;

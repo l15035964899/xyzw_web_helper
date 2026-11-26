@@ -1,3 +1,4 @@
+import { expectedRoleIdFromToken } from "./roleIdentity.js";
 import { createBrowserTokenValue } from "./serverTaskToken.js";
 
 function tryJson(value) {
@@ -19,8 +20,8 @@ function normalizePayload(value) {
 }
 
 function canonicalRoleId(token) {
-  const nameRoleId = String(token?.name || "").match(/-(\d+)$/)?.[1];
-  if (nameRoleId) return nameRoleId;
+  const expectedRoleId = expectedRoleIdFromToken(token);
+  if (expectedRoleId) return expectedRoleId;
   try {
     const parsed = decodeLocalTokenPayload(token?.token);
     return String(token?.roleId ?? parsed.roleId ?? "") || null;
@@ -160,8 +161,12 @@ export async function syncLocalTokensToServer({
   const serverTokens = Array.isArray(current) ? current : [];
   const byRoleId = new Map(
     serverTokens
-      .filter((token) => token.roleId != null)
-      .map((token) => [String(token.roleId), token]),
+      .map((token) => [
+        expectedRoleIdFromToken(token) ||
+          (token.roleId != null ? String(token.roleId) : null),
+        token,
+      ])
+      .filter(([roleId]) => roleId != null),
   );
   let created = 0;
   let updated = 0;
@@ -175,13 +180,18 @@ export async function syncLocalTokensToServer({
     try {
       const parsed = decodeLocalTokenPayload(token.token);
       const roleId = token.roleId ?? parsed.roleId ?? null;
+      const expectedRoleId =
+        expectedRoleIdFromToken(token) ||
+        (roleId != null ? String(roleId) : null);
       const existing =
-        (roleId != null ? byRoleId.get(String(roleId)) : null) ||
+        (expectedRoleId ? byRoleId.get(expectedRoleId) : null) ||
+        serverTokens.find((item) => item.id === token.serverAccountId) ||
         serverTokens.find((item) => item.id === token.id);
       const body = {
         name: token.name,
         token: createBrowserTokenValue(parsed),
         roleId,
+        expected_role_id: expectedRoleId,
         sessId: parsed.sessId,
         connId: parsed.connId,
         isRestore: parsed.isRestore,
@@ -214,8 +224,8 @@ export async function syncLocalTokensToServer({
         serverTokens.push(createdToken);
         tokenIdMap[token.id] = createdToken.id;
         serverTokenId = createdToken.id;
-        if (roleId != null) {
-          byRoleId.set(String(roleId), createdToken);
+        if (expectedRoleId) {
+          byRoleId.set(expectedRoleId, createdToken);
         }
         created += 1;
       }

@@ -114,7 +114,9 @@ test("sync uploads the local BIN as a private refresh credential", async () => {
     assert.equal(result.refreshCredentialsMissing, 0);
     assert.equal(result.refreshCredentialsFailed, 0);
     assert.equal(arrayBufferToBase64(bin.buffer), "AQIDBAU=");
-    const upload = calls.find(({ path }) => path.endsWith("/refresh-credential"));
+    const upload = calls.find(({ path }) =>
+      path.endsWith("/refresh-credential"),
+    );
     assert.equal(upload.options.body.bin_base64, "AQIDBAU=");
     const update = calls.find(({ options }) => options.method === "PATCH");
     assert.equal(update.options.body.importMethod, "wxQrcode");
@@ -188,6 +190,56 @@ test("sync updates existing role and adds a new account with local settings", as
     assert.deepEqual(createCall.options.body.daily_settings, {
       arenaFormation: 4,
     });
+  } finally {
+    globalThis.localStorage = previousStorage;
+  }
+});
+
+test("sync matches accounts by displayed role id instead of stale auth role id", async () => {
+  const previousStorage = globalThis.localStorage;
+  globalThis.localStorage = { getItem: () => null };
+  try {
+    const calls = [];
+    const server = [
+      {
+        id: "server-a",
+        name: "AIRUI-0-82539560",
+        roleId: 75758961,
+        enabled: true,
+      },
+      {
+        id: "server-b",
+        name: "AIRUI-1-462554796",
+        roleId: 462554796,
+        enabled: true,
+      },
+    ];
+    const request = async (path, options = {}) => {
+      calls.push({ path, options });
+      if (path === "/api/tokens" && !options.method) return [...server];
+      if (path.startsWith("/api/tokens/") && options.method === "PATCH") {
+        const id = path.split("/").at(-1);
+        const current = server.find((token) => token.id === id);
+        return [{ ...current, ...options.body }];
+      }
+      throw new Error(`Unexpected request: ${path}`);
+    };
+
+    await syncLocalTokensToServer({
+      tokens: [
+        {
+          id: "local-a",
+          name: "AIRUI-0-82539560",
+          roleId: 75758961,
+          token: JSON.stringify({ roleToken: "role-a", roleId: 75758961 }),
+        },
+      ],
+      request,
+    });
+
+    const update = calls.find(({ options }) => options.method === "PATCH");
+    assert.equal(update.path, "/api/tokens/server-a");
+    assert.equal(update.options.body.expected_role_id, "82539560");
   } finally {
     globalThis.localStorage = previousStorage;
   }
