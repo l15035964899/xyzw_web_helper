@@ -35,7 +35,9 @@ const errorCodeMap = {
   1000020: "今天已经领取过奖励了",
   3300050: "购买数量超出限制",
   700020: "已经领取过这个任务",
+  800040: "没有可领取的挂机奖励",
   12400000: "挂机奖励领取过于频繁",
+  12400160: "请先开始功法残卷收集",
   2300250: "俱乐部BOSS今日攻打次数已用完",
   400010: "物品数量不足",
   7900023: "已达到使用次数上限",
@@ -47,6 +49,7 @@ const errorCodeMap = {
   4800080: "不在规定时间内或未到报名阶段",
   4800040: "俱乐部没有报名",
   2100010: "活动未开放",
+  1100010: "本周限购奖励已领取",
 };
 
 // 事件节流定义表，根据实际需要调整命令和节流时间
@@ -351,6 +354,12 @@ export function registerDefaultCommands(reg) {
     .register("activity_lottery")
     .register("activity_claimsignreward")
     .register("activity_commonbuygoods")
+    .register("activity_claimrolluppack", { id: 17 })
+    .register("activity_buystoregoods", {
+      activityId: 6,
+      goodsIndex: 0,
+      buyNum: 1,
+    })
     .register("legion_getpayloadtask")
     .register("legion_getpayloadkillrecord")
     .register("legion_getpayloadbf")
@@ -369,6 +378,7 @@ export function registerDefaultCommands(reg) {
 
     // 功法
     .register("legacy_getinfo")
+    .register("legacy_beginhangup")
     .register("legacy_claimhangup")
     // 功法残卷赠送
     .register("legacy_gift_getlist")
@@ -1287,9 +1297,12 @@ export class XyzwWebSocketClient {
       activity_getlotteryinforesp: "activity_getlotteryinfo",
       activity_lotteryresp: "activity_lottery",
       activity_rewardresp: "activity_claimsignreward",
+      activity_claimrolluppackresp: "activity_claimrolluppack",
+      activity_buystoregoodsresp: "activity_buystoregoods",
       bosstower_gethelprankresp: "bosstower_gethelprank",
       // 功法相关响应映射
       legacy_getinforesp: "legacy_getinfo",
+      legacy_beginhangupresp: "legacy_beginhangup",
       legacy_claimhangupresp: "legacy_claimhangup",
       legacy_sendgiftresp: "legacy_sendgift",
       legacy_getgiftsresp: "legacy_getgifts",
@@ -1330,6 +1343,8 @@ export class XyzwWebSocketClient {
         "artifact_exchange",
         "hero_exchange",
         "hero_rebirth",
+        "activity_claimrolluppack",
+        "activity_buystoregoods",
       ],
     };
 

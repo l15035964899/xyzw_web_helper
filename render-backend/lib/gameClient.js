@@ -20,12 +20,14 @@ const errorCodeMap = {
   400190: "没有可领取的签到奖励",
   1000020: "今天已领取",
   700020: "已领取过",
+  800040: "没有可领取的挂机奖励",
   400010: "物品不足",
   1500020: "能量不足",
   3500020: "没有可领取的奖励",
   200160: "模块未开启",
   200020: "出了点小问题",
   12400000: "挂机奖励领取过于频繁",
+  12400160: "请先开始功法残卷收集",
   7500140: "请先输入密码",
   7500100: "密码输入错误",
   7500120: "密码输入错误次数已达上限",
@@ -38,6 +40,11 @@ const errorCodeMap = {
   4800040: "俱乐部没有报名",
   2100010: "活动未开放",
   200750: "战斗版本已失效，请刷新战斗数据后重试",
+  1100010: "本周限购奖励已领取",
+  7100020: "已经加入队伍",
+  7800320: "不在队伍中",
+  200110: "内容包含非法字符",
+  6100020: "房间战斗中，不能设置",
 };
 
 const BATTLE_VERSION_COMMANDS = new Set([
@@ -83,6 +90,7 @@ const CMD_DEFAULTS = {
   bottlehelper_start: { bottleType: -1 },
   bottlehelper_claim: {},
   legacy_getinfo: {},
+  legacy_beginhangup: {},
   legacy_claimhangup: {},
   hero_recruit: { byClub: false, recruitNumber: 1, recruitType: 3 },
   study_startgame: {},
@@ -148,6 +156,12 @@ const CMD_DEFAULTS = {
   activity_lottery: { times: 1 },
   activity_claimsignreward: {},
   activity_commonbuygoods: {},
+  activity_claimrolluppack: { id: 17 },
+  activity_buystoregoods: {
+    activityId: 6,
+    goodsIndex: 0,
+    buyNum: 1,
+  },
 };
 
 // 响应→请求命令映射
@@ -172,6 +186,7 @@ const RESP_MAP = {
   bottlehelper_claimresp: "bottlehelper_claim",
   bottlehelper_startresp: "bottlehelper_start",
   legacy_getinforesp: "legacy_getinfo",
+  legacy_beginhangupresp: "legacy_beginhangup",
   legacy_claimhangupresp: "legacy_claimhangup",
   hero_recruitresp: "hero_recruit",
   studyresp: "study_startgame",
@@ -229,6 +244,8 @@ const RESP_MAP = {
   activity_getlotteryinforesp: "activity_getlotteryinfo",
   activity_lotteryresp: "activity_lottery",
   activity_rewardresp: "activity_claimsignreward",
+  activity_claimrolluppackresp: "activity_claimrolluppack",
+  activity_buystoregoodsresp: "activity_buystoregoods",
   syncrewardresp: [
     "system_buygold",
     "system_signinreward",
@@ -239,6 +256,8 @@ const RESP_MAP = {
     "genie_sweep",
     "system_claimcdkreward",
     "dungeon_selecthero",
+    "activity_claimrolluppack",
+    "activity_buystoregoods",
   ],
   syncresp: [
     "system_mysharecallback",
