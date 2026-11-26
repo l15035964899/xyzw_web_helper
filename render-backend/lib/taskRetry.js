@@ -1,10 +1,17 @@
 export const DEFAULT_FAILED_TASK_RETRY_DELAY_MS = 30 * 60 * 1000;
+export const DEFERRED_LEGACY_FOLLOWUP_DELAY_MS = 6 * 60 * 1000;
 export const AUTO_RETRY_TASK_KEYS = new Set([
   "batchLegacyClaim",
   "claimHangUpRewards",
   "resetBottles",
 ]);
+const DEFERRED_FOLLOWUP_TASK_KEYS = new Set(["batchLegacyClaim"]);
 const AUTO_RETRY_SOURCES = new Set(["nas-cron", "nas-scheduler"]);
+const DEFERRED_FOLLOWUP_SOURCES = new Set([
+  "nas-cron",
+  "nas-scheduler",
+  "nas-manual",
+]);
 
 function selectedTaskKeys(task) {
   const value = task?.selected_tasks || task?.task_types || [];
@@ -24,23 +31,40 @@ export function shouldRetryTaskAutomatically(task, source) {
   );
 }
 
+export function shouldContinueDeferredTask(task, source) {
+  return (
+    DEFERRED_FOLLOWUP_SOURCES.has(source) &&
+    selectedTaskKeys(task).some((key) => DEFERRED_FOLLOWUP_TASK_KEYS.has(key))
+  );
+}
+
 export function createFailedTaskRetryScheduler({
   dataStore,
   executeTask,
   addLog = () => {},
-  delayMs = DEFAULT_FAILED_TASK_RETRY_DELAY_MS,
+  delayMs: defaultDelayMs = DEFAULT_FAILED_TASK_RETRY_DELAY_MS,
   now = Date.now,
   setTimer = setTimeout,
   clearTimer = clearTimeout,
 }) {
   const timers = new Map();
 
-  function schedule({ task, tokenIds, source }) {
-    if (!shouldRetryTaskAutomatically(task, source)) return null;
+  function schedule({
+    task,
+    tokenIds,
+    source,
+    reason = "retry",
+    delayMs = defaultDelayMs,
+  }) {
+    const deferred = reason === "deferred";
+    const allowed = deferred
+      ? shouldContinueDeferredTask(task, source)
+      : shouldRetryTaskAutomatically(task, source);
+    if (!allowed) return null;
     const retryTokenIds = [...new Set((tokenIds || []).map(String))];
     if (retryTokenIds.length === 0) return null;
     if (timers.has(task.id)) {
-      addLog("INFO", "taskRetry", `${task.name}: 已有等待中的失败重试`, {
+      addLog("INFO", "taskRetry", `${task.name}: 已有等待中的自动续跑`, {
         taskId: task.id,
       });
       return null;
@@ -69,7 +93,7 @@ export function createFailedTaskRetryScheduler({
           addLog(
             "INFO",
             "taskRetry",
-            `${task.name}: 延迟重试取消，失败账号已移出任务`,
+            `${task.name}: 延迟续跑取消，账号已移出任务`,
             { taskId: task.id },
           );
           return;
@@ -77,7 +101,9 @@ export function createFailedTaskRetryScheduler({
         addLog(
           "INFO",
           "taskRetry",
-          `${task.name}: 开始重试 ${remainingIds.length} 个失败账号`,
+          deferred
+            ? `${task.name}: 开始继续领取 ${remainingIds.length} 个账号`
+            : `${task.name}: 开始重试 ${remainingIds.length} 个失败账号`,
           { taskId: task.id, source: "nas-retry" },
         );
         await executeTask(
@@ -99,7 +125,9 @@ export function createFailedTaskRetryScheduler({
     addLog(
       "WARN",
       "taskRetry",
-      `${task.name}: ${retryTokenIds.length} 个账号失败，将在 ${new Date(scheduledAtMs).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", hour12: false })} 重试一次`,
+      deferred
+        ? `${task.name}: ${retryTokenIds.length} 个账号已开始收集，将在 ${new Date(scheduledAtMs).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", hour12: false })} 自动领取`
+        : `${task.name}: ${retryTokenIds.length} 个账号失败，将在 ${new Date(scheduledAtMs).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", hour12: false })} 重试一次`,
       { taskId: task.id, source },
     );
     return { scheduledAt, tokenIds: retryTokenIds, delayMs };

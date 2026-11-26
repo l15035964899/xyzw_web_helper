@@ -3,6 +3,11 @@
  * 包含: batchLegacyClaim, batchLegacyGiftSendEnhanced
  */
 
+const LEGACY_ITEM_ID = 37007;
+const LEGACY_MIN_COLLECT_MS = 60_000;
+const LEGACY_FIRST_REWARD_MS = 300_000;
+const LEGACY_COLLECT_SETTLE_MS = 1_500;
+
 /**
  * 创建功法类任务执行器
  * @param {object} deps - 依赖项
@@ -55,15 +60,81 @@ export function createTasksLegacy(deps) {
         });
         await ensureConnection(tokenId);
 
-        const LegacyClaimHangUpResp = await tokenStore.sendMessageWithPromise(
+        const legacyInfo = await tokenStore.sendMessageWithPromise(
           tokenId,
-          "legacy_claimhangup",
+          "legacy_getinfo",
           {},
           5000,
         );
+        let hangUpBeginTime = Number(
+          legacyInfo?.roleLegacy?.hangUpBeginTime || 0,
+        );
+        const startedNow = hangUpBeginTime <= 0;
+        if (startedNow) {
+          const started = await tokenStore.sendMessageWithPromise(
+            tokenId,
+            "legacy_beginhangup",
+            {},
+            5000,
+          );
+          hangUpBeginTime = Number(
+            started?.roleLegacy?.hangUpBeginTime || Date.now(),
+          );
+          addLog({
+            time: new Date().toLocaleTimeString(),
+            message: `=== ${token.name} 已自动开始收集功法残卷 ===`,
+            type: "info",
+          });
+        }
+
+        const waitMs = Math.max(
+          0,
+          Math.max(LEGACY_MIN_COLLECT_MS, LEGACY_FIRST_REWARD_MS) +
+            LEGACY_COLLECT_SETTLE_MS -
+            Math.max(0, Date.now() - hangUpBeginTime),
+        );
+        if (waitMs > 0) {
+          addLog({
+            time: new Date().toLocaleTimeString(),
+            message: `=== ${token.name} 功法残卷收集中，等待 ${Math.ceil(waitMs / 1000)} 秒后领取 ===`,
+            type: "info",
+          });
+          await new Promise((resolve) => setTimeout(resolve, waitMs));
+        }
+        if (shouldStop.value) {
+          tokenStatus.value[tokenId] = "stopped";
+          return;
+        }
+
+        let legacyClaimResp;
+        try {
+          legacyClaimResp = await tokenStore.sendMessageWithPromise(
+            tokenId,
+            "legacy_claimhangup",
+            {},
+            5000,
+          );
+        } catch (error) {
+          if (!/800040|12400000|12400160/.test(String(error.message))) {
+            throw error;
+          }
+          tokenStatus.value[tokenId] = "completed";
+          addLog({
+            time: new Date().toLocaleTimeString(),
+            message: String(error.message).includes("12400000")
+              ? `=== ${token.name} 领取过于频繁，奖励留待下次执行 ===`
+              : `=== ${token.name} 暂未产生可领取残券，收集仍在继续，请稍后再次执行 ===`,
+            type: "warning",
+          });
+          return;
+        }
+        const reward = Number(legacyClaimResp.reward?.[0]?.value || 0);
+        const count = Number(
+          legacyClaimResp.role?.items?.[LEGACY_ITEM_ID]?.quantity || 0,
+        );
         addLog({
           time: new Date().toLocaleTimeString(),
-          message: `=== ${token.name} 成功领取功法残卷${LegacyClaimHangUpResp.reward[0].value}，共有${LegacyClaimHangUpResp.role.items[37007].quantity}个`,
+          message: `=== ${token.name} ${startedNow ? "已自动开始收集并领取" : "成功领取"}功法残卷${reward}，共有${count}个`,
           type: "success",
         });
         tokenStatus.value[tokenId] = "completed";
