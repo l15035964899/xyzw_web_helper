@@ -1054,6 +1054,10 @@ async function registerAllCrons() {
   let tasks = [];
   try {
     tasks = await dataStore.listTasks({ enabledOnly: true });
+    tasks = [...tasks].sort(
+      (left, right) =>
+        (Number(right.priority) || 0) - (Number(left.priority) || 0),
+    );
   } catch (error) {
     addLog("ERROR", "cron", "读取定时任务失败", { error: error.message });
     return;
