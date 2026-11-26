@@ -299,6 +299,7 @@ import {
   watch,
 } from "vue";
 import { useTokenStore } from "@/stores/tokenStore";
+import { formatLogTime } from "@/utils/batch/logUtils";
 import { DailyTaskRunner } from "@/utils/dailyTaskRunner";
 import {
   getDailyTaskStates,
@@ -384,7 +385,7 @@ const logList = ref([]);
 const LOG_MAX = 500;
 
 const log = (message, type = "info") => {
-  const time = new Date().toLocaleTimeString();
+  const time = formatLogTime(new Date());
   logList.value.push({ time, message, type });
 
   if (logList.value.length > LOG_MAX) {
@@ -901,8 +902,9 @@ onBeforeUnmount(() => {
 
 .log-time {
   color: var(--text-tertiary);
-  min-width: 80px;
+  min-width: 110px;
   flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .log-message {

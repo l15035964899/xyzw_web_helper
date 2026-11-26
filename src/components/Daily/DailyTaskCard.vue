@@ -177,6 +177,7 @@ import {
 } from "@vicons/ionicons5";
 import { useMessage } from "naive-ui";
 import { ref, watch } from "vue";
+import { formatLogTime as formatLogTimestamp } from "@/utils/batch/logUtils";
 
 const props = defineProps({
   task: {
@@ -249,12 +250,7 @@ const formatResetTime = (timestamp) => {
 };
 
 const formatLogTime = (timestamp) => {
-  const date = new Date(timestamp);
-  return date.toLocaleTimeString("zh-CN", {
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  });
+  return formatLogTimestamp(timestamp);
 };
 
 // 监听任务设置变化
@@ -527,7 +523,7 @@ watch(
 .log-time {
   color: var(--text-secondary);
   white-space: nowrap;
-  min-width: 60px;
+  min-width: 110px;
 }
 
 .log-message {

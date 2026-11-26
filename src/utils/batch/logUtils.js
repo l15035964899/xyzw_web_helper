@@ -2,6 +2,31 @@
  * 日志管理工具
  */
 
+const pad2 = (value) => String(value).padStart(2, "0");
+
+/**
+ * Format a log timestamp as `MM-DD HH:mm:ss`.
+ * Time-only values inherit the month/day from the supplied reference date.
+ */
+export function formatLogTime(value = new Date(), referenceDate = new Date()) {
+  const raw = String(value ?? "").trim();
+  const timeOnly = raw.match(/^(\d{1,2}):(\d{2}):(\d{2})$/);
+  if (timeOnly) {
+    const reference =
+      referenceDate instanceof Date ? referenceDate : new Date(referenceDate);
+    const base = Number.isNaN(reference.getTime()) ? new Date() : reference;
+    return `${pad2(base.getMonth() + 1)}-${pad2(base.getDate())} ${pad2(
+      Number(timeOnly[1]),
+    )}:${timeOnly[2]}:${timeOnly[3]}`;
+  }
+
+  const date = value ? (value instanceof Date ? value : new Date(value)) : new Date();
+  if (Number.isNaN(date.getTime())) return raw;
+  return `${pad2(date.getMonth() + 1)}-${pad2(date.getDate())} ${pad2(
+    date.getHours(),
+  )}:${pad2(date.getMinutes())}:${pad2(date.getSeconds())}`;
+}
+
 /**
  * 创建日志管理器
  * @param {object} options - 配置选项
@@ -24,8 +49,12 @@ export function createLogManager({
    * @param {object} log - 日志对象 {time: string, message: string, type: string}
    */
   const addLog = (log) => {
+    const normalizedLog = {
+      ...log,
+      time: formatLogTime(log.time),
+    };
     // 添加日志数据到数组
-    logs.value.push(log);
+    logs.value.push(normalizedLog);
 
     // 限制logs数组大小，防止内存占用过大
     const maxLogEntries = batchSettings.maxLogEntries || 1000;
