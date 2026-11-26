@@ -8,6 +8,7 @@ import {
   runResetBottles,
   runXuanwuBlessing,
 } from "./gameTasks.js";
+import { runCharmPurchaseForClient } from "./nightmareRunner.js";
 
 const FISH_TARGET = 320;
 const ARENA_TARGET = 240;
@@ -1779,6 +1780,16 @@ export const NATIVE_TASK_CATALOG = {
     ],
   },
   batchXuanwuBlessing: { name: "一键玄武赐福", group: "daily" },
+  nightmareChallenge: {
+    name: "自动十殿",
+    group: "nightmare",
+    crossAccount: true,
+  },
+  nightmareCharmPurchase: {
+    name: "抢十殿符咒",
+    group: "nightmare",
+    description: "为主力补齐第1～6层缺失符咒，优先第2、5层",
+  },
 };
 
 export async function runNativeBatchTask(key, client, context) {
@@ -1998,6 +2009,17 @@ export async function runNativeBatchTask(key, client, context) {
       return [await runBuyDreamItems(client, token, task)];
     case "batchXuanwuBlessing":
       return runXuanwuBlessing(client, context);
+    case "nightmareCharmPurchase":
+      return [
+        await runCharmPurchaseForClient({
+          client,
+          token,
+          charmSettings: task?.options?.nightmare?.charm,
+          waitUntil: task?.options?.charmPurchaseWaitUntil,
+        }),
+      ];
+    case "nightmareChallenge":
+      throw new Error("自动十殿必须使用跨账号编排器，不能按单账号执行");
     default:
       throw new Error(`未知原生批量任务: ${key}`);
   }

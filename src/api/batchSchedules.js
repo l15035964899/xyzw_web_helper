@@ -64,6 +64,7 @@ export function serverTaskToUi(task = {}) {
       task.selected_tasks || task.task_type,
     ),
     legionApplyTargetId: Number(task.options?.legionId || 0) || null,
+    nightmareTeamId: task.options?.nightmareTeamId || null,
     serverOptions:
       task.options && typeof task.options === "object" ? { ...task.options } : {},
     enabled: Boolean(task.enabled),
@@ -84,6 +85,13 @@ export function uiTaskToServer(task, { existingOptions = {} } = {}) {
   const legionId = Number(task.legionApplyTargetId || 0);
   if (legionId > 0) options.legionId = legionId;
   else delete options.legionId;
+  if (task.selectedTasks?.includes("nightmareChallenge")) {
+    if (task.nightmareTeamId) {
+      options.nightmareTeamId = String(task.nightmareTeamId);
+    } else {
+      delete options.nightmareTeamId;
+    }
+  }
 
   return {
     id: task.id || undefined,

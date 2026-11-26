@@ -39,6 +39,9 @@
                 </template>
                 设置
               </n-button>
+              <n-button type="warning" size="medium" @click="openNightmareConfig">
+                十殿配置
+              </n-button>
             </div>
           </div>
 
@@ -2192,6 +2195,31 @@
               定时执行“批量申请俱乐部”时会对所有选中账号申请这个俱乐部。
             </div>
           </div>
+          <div
+            v-if="taskForm.selectedTasks.includes('nightmareChallenge')"
+            class="setting-item"
+          >
+            <label class="setting-label">自动十殿队伍</label>
+            <n-select
+              v-model:value="taskForm.nightmareTeamId"
+              :options="nightmareTeamOptions"
+              placeholder="选择十殿配置中的队伍"
+              clearable
+            />
+            <div style="font-size: 12px; color: #86909c">
+              保存任务时会自动使用该队伍配置中的成员账号。自动十殿任务必须单独创建，不能与其他任务类型混用。
+              跨周模式建议使用 Sunday 23:30 的 Cron：<code>30 23 * * 0</code>。
+            </div>
+            <n-button
+              size="tiny"
+              type="warning"
+              secondary
+              style="margin-top: 6px"
+              @click="openNightmareConfig"
+            >
+              打开十殿配置
+            </n-button>
+          </div>
         </div>
         <div class="modal-actions" style="margin-top: 20px; text-align: right">
           <n-button @click="showTaskModal = false" style="margin-right: 12px"
@@ -3086,6 +3114,12 @@
         </div>
       </div>
     </n-modal>
+    <NightmareConfigModal
+      v-model:show="showNightmareConfig"
+      :settings="batchSettings.nightmare"
+      :accounts="serverAccounts"
+      @saved="handleNightmareSettingsSaved"
+    />
   </div>
 </template>
 
@@ -3117,6 +3151,7 @@ import {
   saveServerSchedule,
   setServerScheduleEnabled,
 } from "@/api/batchSchedules";
+import NightmareConfigModal from "@/components/Nightmare/NightmareConfigModal.vue";
 import useIndexedDB from "@/hooks/useIndexedDB";
 import { $emit } from "@/stores/events/index.ts";
 import { gameTokens, tokenGroups, useTokenStore } from "@/stores/tokenStore";
@@ -3169,6 +3204,10 @@ import { goldItemsConfig, merchantConfig } from "@/utils/dreamConstants";
 import { isSameGameValue } from "@/utils/gameValue.js";
 import { ensureManualLease, releaseManualLease } from "@/utils/manualLease";
 import { readNasTokenIdMap } from "@/utils/nasTokenBootstrap";
+import {
+  cloneNightmareSettings,
+  defaultNightmareSettings,
+} from "@/utils/nightmare";
 import {
   getScheduleTokenValue,
   hasSelectedScheduleTokens,
@@ -3715,6 +3754,7 @@ const helperModalTitle = computed(() => {
 
 // Batch Settings State
 const showBatchSettingsModal = ref(false);
+const showNightmareConfig = ref(false);
 
 const defaultDreamPurchaseList = [];
 for (const merchantId in goldItemsConfig) {
@@ -3757,6 +3797,7 @@ const batchSettings = reactive({
   connectionTimeout: 10000,
   reconnectDelay: 1000,
   maxLogEntries: 1000,
+  nightmare: cloneNightmareSettings(defaultNightmareSettings),
   // 页面刷新配置
   enableRefresh: false,
   refreshInterval: 360, // 分钟
@@ -3772,6 +3813,9 @@ const loadBatchSettings = async ({ fromServer = false } = {}) => {
     }
     batchSettings.cdkCodes = batchSettings.cdkCodes || "";
     batchSettings.cdkPlatformType = batchSettings.cdkPlatformType || "h5";
+    batchSettings.nightmare = cloneNightmareSettings(
+      batchSettings.nightmare || defaultNightmareSettings,
+    );
     batchSettings.blackMarketPurchaseList = normalizeBlackMarketPurchaseList(
       batchSettings.blackMarketPurchaseList?.length
         ? batchSettings.blackMarketPurchaseList
@@ -3817,6 +3861,7 @@ const serverBatchSettingsPayload = () => ({
   password: batchSettings.password,
   weirdTowerMaxClimb: weirdTowerMaxClimb.value,
   giftQuantity: giftQuantity.value,
+  nightmare: cloneNightmareSettings(batchSettings.nightmare),
 });
 
 // Save NAS-owned execution settings and mirror them locally.
@@ -3837,6 +3882,17 @@ const saveBatchSettings = async () => {
 const openBatchSettings = () => {
   loadBatchSettings({ fromServer: true });
   showBatchSettingsModal.value = true;
+};
+
+const openNightmareConfig = async () => {
+  await loadServerAccounts({ quiet: true });
+  await loadBatchSettings({ fromServer: true });
+  showNightmareConfig.value = true;
+};
+
+const handleNightmareSettingsSaved = (nightmare) => {
+  batchSettings.nightmare = cloneNightmareSettings(nightmare);
+  localStorage.setItem("batchSettings", JSON.stringify(batchSettings));
 };
 
 // ======================
@@ -3910,6 +3966,7 @@ const taskForm = reactive({
   selectedTokens: [], // Selected token IDs
   selectedTasks: [], // Selected task function names
   legionApplyTargetId: null, // Target legion for batchApplyLegion
+  nightmareTeamId: null,
   enabled: true, // Whether the task is enabled
 });
 
@@ -4020,6 +4077,11 @@ const taskGroupDefinitions = [
     label: "月度",
     tasks: ["batchTopUpFish", "batchTopUpArena"],
   },
+  {
+    name: "nightmare",
+    label: "十殿",
+    tasks: ["nightmareChallenge", "nightmareCharmPurchase"],
+  },
 ];
 
 // 计算属性，根据 taskGroupDefinitions 将 availableTasks 分组
@@ -4042,6 +4104,13 @@ const groupedAvailableTasks = computed(() => {
 
   return groups;
 });
+
+const nightmareTeamOptions = computed(() =>
+  (batchSettings.nightmare?.teams || []).map((team) => ({
+    label: `${team.name || team.id}${team.enabled === false ? "（停用）" : ""}`,
+    value: team.id,
+  })),
+);
 
 // Cron表达式解析相关变量
 const cronValidation = ref({ valid: true, message: "" });
@@ -4193,6 +4262,7 @@ const openTaskModal = async () => {
     selectedTokens: [],
     selectedTasks: [],
     legionApplyTargetId: null,
+    nightmareTeamId: null,
     enabled: true,
   });
   showTaskModal.value = true;
@@ -4231,6 +4301,7 @@ const editTask = async (task) => {
     selectedTokens: [],
     selectedTasks: [],
     legionApplyTargetId: null,
+    nightmareTeamId: null,
     enabled: true,
   });
   Object.assign(taskForm, taskData);
@@ -4302,13 +4373,34 @@ const saveTask = async () => {
     }
   }
 
-  if (taskForm.selectedTokens.length === 0) {
-    message.warning("请选择至少一个账号");
+  if (taskForm.selectedTasks.length === 0) {
+    message.warning("请选择至少一个任务");
     return;
   }
 
-  if (taskForm.selectedTasks.length === 0) {
-    message.warning("请选择至少一个任务");
+  if (taskForm.selectedTasks.includes("nightmareChallenge")) {
+    if (taskForm.selectedTasks.length !== 1) {
+      message.warning("自动十殿必须单独创建定时任务，不能与其他任务混用");
+      return;
+    }
+    if (!taskForm.nightmareTeamId) {
+      message.warning("请选择自动十殿队伍");
+      return;
+    }
+    const team = (batchSettings.nightmare?.teams || []).find(
+      (entry) => String(entry.id) === String(taskForm.nightmareTeamId),
+    );
+    if (!team) {
+      message.warning("选中的十殿队伍配置不存在，请重新打开配置");
+      return;
+    }
+    taskForm.selectedTokens = (team.members || [])
+      .map((entry) => String(entry.tokenId))
+      .filter(Boolean);
+  }
+
+  if (taskForm.selectedTokens.length === 0) {
+    message.warning("请选择至少一个账号");
     return;
   }
 
@@ -4342,6 +4434,7 @@ const saveTask = async () => {
     selectedTokens: [...taskForm.selectedTokens],
     selectedTasks: [...taskForm.selectedTasks],
     legionApplyTargetId: Number(taskForm.legionApplyTargetId || 0) || null,
+    nightmareTeamId: taskForm.nightmareTeamId || null,
     enabled: taskForm.enabled,
   };
 

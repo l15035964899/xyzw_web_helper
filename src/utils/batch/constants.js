@@ -62,6 +62,8 @@ export const availableTasks = [
   { label: "一键配置黑市采购清单", value: "store_syncpurchaseconfig" },
   { label: "一键黑市采购", value: "store_purchase" },
   { label: "免费领取珍宝阁", value: "collection_claimfreereward" },
+  { label: "一键领取十殿礼包", value: "activity_claimrolluppack" },
+  { label: "领取招募周限时商店", value: "activity_buystoregoods" },
   { label: "批量领取功法残卷", value: "batchLegacyClaim" },
   { label: "批量赠送功法残卷", value: "batchLegacyGiftSendEnhanced" },
   { label: "一键使用怪异塔道具", value: "batchUseItems" },
@@ -70,6 +72,8 @@ export const availableTasks = [
   { label: "一键扫荡灯神", value: "batchGenieSweep" },
   { label: "一键购买梦境商品", value: "batchBuyDreamItems" },
   { label: "一键玄武赐福", value: "batchXuanwuBlessing" },
+  { label: "自动十殿", value: "nightmareChallenge" },
+  { label: "抢十殿符咒", value: "nightmareCharmPurchase" },
 ];
 
 // 月度任务目标
@@ -142,6 +146,16 @@ export const defaultBatchSettings = {
   maxLogEntries: 1000,
   cdkCodes: "",
   cdkPlatformType: "h5",
+  nightmare: {
+    version: 1,
+    teams: [],
+    charm: {
+      priority: [2, 5, 1, 3, 4, 6],
+      targets: { 1: 1, 2: 1, 3: 1, 4: 1, 5: 1, 6: 1 },
+      pollIntervalMs: 2000,
+      pollDurationMs: 120000,
+    },
+  },
 };
 
 // 默认模板
@@ -168,6 +182,7 @@ export const defaultTaskForm = {
   selectedTokens: [],
   selectedTasks: [],
   legionApplyTargetId: null,
+  nightmareTeamId: null,
   enabled: true,
 };
 
