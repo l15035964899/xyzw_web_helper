@@ -134,6 +134,7 @@ export function createLocalStore({ dataDir }) {
     root,
     "token-refresh-credentials.json",
   );
+  const nightmareRunsFile = path.join(root, "nightmare-runs.json");
   let writeQueue = Promise.resolve();
 
   async function readJson(file, fallback) {
@@ -462,6 +463,41 @@ export function createLocalStore({ dataDir }) {
     });
   }
 
+  async function listNightmareRunStates() {
+    const values = await readJson(nightmareRunsFile, {});
+    return values && typeof values === "object" ? values : {};
+  }
+
+  async function getNightmareRunState(id) {
+    const values = await listNightmareRunStates();
+    return values[String(id)] || null;
+  }
+
+  async function saveNightmareRunState(state = {}) {
+    return mutate(async () => {
+      const id = String(state.taskId || state.teamId || state.id || "");
+      if (!id) throw new Error("十殿运行状态缺少 taskId/teamId");
+      const current = await listNightmareRunStates();
+      current[id] = {
+        ...state,
+        id,
+        updatedAt: state.updatedAt || new Date().toISOString(),
+      };
+      await writeJson(nightmareRunsFile, current);
+      return current[id];
+    });
+  }
+
+  async function deleteNightmareRunState(id) {
+    return mutate(async () => {
+      const current = await listNightmareRunStates();
+      if (!Object.hasOwn(current, String(id))) return false;
+      delete current[String(id)];
+      await writeJson(nightmareRunsFile, current);
+      return true;
+    });
+  }
+
   return {
     kind: "local",
     root,
@@ -484,6 +520,10 @@ export function createLocalStore({ dataDir }) {
     getBatchSettings,
     hasBatchSettings,
     updateBatchSettings,
+    listNightmareRunStates,
+    getNightmareRunState,
+    saveNightmareRunState,
+    deleteNightmareRunState,
     appendTaskLog,
     appendTaskLogs,
     listTaskLogs,

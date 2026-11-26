@@ -14,6 +14,7 @@ function createSupabaseStore(url, key) {
   const supabase = createClient(url, key);
   let batchSettings = normalizeBatchSettings();
   let batchSettingsInitialized = false;
+  const nightmareRunStates = {};
 
   async function listTokens({ enabledOnly = false } = {}) {
     let query = supabase.from("tokens").select("*").order("created_at");
@@ -162,6 +163,27 @@ function createSupabaseStore(url, key) {
     return batchSettings;
   }
 
+  async function listNightmareRunStates() {
+    return { ...nightmareRunStates };
+  }
+
+  async function getNightmareRunState(id) {
+    return nightmareRunStates[String(id)] || null;
+  }
+
+  async function saveNightmareRunState(state = {}) {
+    const id = String(state.taskId || state.teamId || state.id || "");
+    if (!id) throw new Error("十殿运行状态缺少 taskId/teamId");
+    nightmareRunStates[id] = { ...state, id };
+    return nightmareRunStates[id];
+  }
+
+  async function deleteNightmareRunState(id) {
+    if (!Object.hasOwn(nightmareRunStates, String(id))) return false;
+    delete nightmareRunStates[String(id)];
+    return true;
+  }
+
   return {
     kind: "supabase",
     init: async () => {},
@@ -178,6 +200,10 @@ function createSupabaseStore(url, key) {
     getBatchSettings,
     hasBatchSettings,
     updateBatchSettings,
+    listNightmareRunStates,
+    getNightmareRunState,
+    saveNightmareRunState,
+    deleteNightmareRunState,
     appendTaskLog,
     appendTaskLogs,
     listTaskLogs,

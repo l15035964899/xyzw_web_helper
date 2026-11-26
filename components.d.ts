@@ -55,6 +55,7 @@ declare module 'vue' {
     MessageTester: typeof import('./src/components/Test/MessageTester.vue')['default']
     MonthlyTasksCard: typeof import('./src/components/cards/MonthlyTasksCard.vue')['default']
     MyCard: typeof import('./src/components/Common/MyCard.vue')['default']
+    NightmareConfigModal: typeof import('./src/components/Nightmare/NightmareConfigModal.vue')['default']
     PeachBattleRecords: typeof import('./src/components/Club/PeachBattleRecords.vue')['default']
     PeachInfo: typeof import('./src/components/Club/PeachInfo.vue')['default']
     PeachInfoV2: typeof import('./src/components/Club/PeachInfoV2.vue')['default']

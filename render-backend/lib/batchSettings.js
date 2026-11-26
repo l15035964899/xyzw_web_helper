@@ -1,3 +1,5 @@
+import { normalizeNightmareSettings } from "./nightmareSettings.js";
+
 export const DEFAULT_BATCH_SETTINGS = Object.freeze({
   dreamPurchaseList: [
     "1-5",
@@ -26,6 +28,7 @@ export const DEFAULT_BATCH_SETTINGS = Object.freeze({
   password: "",
   weirdTowerMaxClimb: 100,
   giftQuantity: 10,
+  nightmare: normalizeNightmareSettings(),
 });
 
 function numberInRange(value, fallback, min, max) {
@@ -108,6 +111,7 @@ export function normalizeBatchSettings(input = {}) {
       1000,
     ),
     giftQuantity: numberInRange(value.giftQuantity, 10, 1, 9999),
+    nightmare: normalizeNightmareSettings(value.nightmare),
   };
 }
 
@@ -136,6 +140,7 @@ export function applyBatchSettingsToTask(task, settings) {
       securityPassword: normalized.password,
       giftQuantity: normalized.giftQuantity,
       weirdTowerMaxClimb: normalized.weirdTowerMaxClimb,
+      nightmare: normalized.nightmare,
       ...taskOptions,
     },
   };
