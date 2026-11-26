@@ -5774,9 +5774,7 @@ const normalizedServerLogs = computed(() =>
   serverLogs.value.map((entry) => {
     const status = String(entry.level || entry.status || "info");
     return {
-      time: new Date(entry.created_at).toLocaleTimeString("zh-CN", {
-        hour12: false,
-      }),
+      time: formatLogTime(entry.created_at),
       type:
         status === "error"
           ? "error"
