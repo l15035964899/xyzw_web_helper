@@ -149,6 +149,146 @@ export async function fillHangUpTime({
   return { sent: before.remaining, ...after };
 }
 
+const OFFICIAL_RESOURCE_BASE = "https://xxz-xyzw-res.hortorgames.com";
+const COCOS_BASE64 =
+  "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+function isDailyTaskConfig(value) {
+  return Boolean(
+    value &&
+    typeof value === "object" &&
+    value.DailyTaskConf &&
+    typeof value.DailyTaskConf === "object",
+  );
+}
+
+function decodeCocosUuid(uuid) {
+  if (typeof uuid !== "string" || uuid.length !== 22) return uuid;
+  let hex = uuid.slice(0, 2);
+  for (let index = 2; index < 22; index += 2) {
+    const first = COCOS_BASE64.indexOf(uuid[index]);
+    const second = COCOS_BASE64.indexOf(uuid[index + 1]);
+    if (first < 0 || second < 0) return uuid;
+    hex += (first >> 2).toString(16);
+    hex += (((first & 3) << 2) | (second >> 4)).toString(16);
+    hex += (second & 15).toString(16);
+  }
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+function getCocosConfigAssetUrl(manifest) {
+  const pathEntry = Object.entries(manifest?.paths || {}).find(
+    ([, info]) => Array.isArray(info) && info[0] === "config",
+  );
+  if (!pathEntry) throw new Error("官方配置资源包缺少 config 资源");
+
+  const [assetIndex, pathInfo] = pathEntry;
+  const uuid = manifest?.uuids?.[Number(assetIndex)];
+  if (typeof uuid !== "string" || !uuid) {
+    throw new Error("官方配置资源包缺少 config UUID");
+  }
+
+  const importVersions = Array.isArray(manifest?.versions?.import)
+    ? manifest.versions.import
+    : [];
+  let importVersion = "";
+  for (let index = 0; index < importVersions.length; index += 2) {
+    if (String(importVersions[index]) === String(assetIndex)) {
+      importVersion = String(importVersions[index + 1] || "");
+      break;
+    }
+  }
+  if (!importVersion) throw new Error("官方配置资源包缺少 config 版本");
+  if (!Array.isArray(pathInfo))
+    throw new Error("官方配置资源包中的 config 信息无效");
+
+  const decodedUuid = decodeCocosUuid(uuid);
+  const importBase = String(manifest.importBase || "import").replace(
+    /^\/+|\/+$/g,
+    "",
+  );
+  return `${OFFICIAL_RESOURCE_BASE}/remote/config/${importBase}/${decodedUuid.slice(0, 2)}/${decodedUuid}.${importVersion}.json`;
+}
+
+function extractDailyTaskConfig(payload) {
+  if (isDailyTaskConfig(payload)) return payload;
+
+  const directAssetConfig = payload?.[5]?.[0]?.[2];
+  if (isDailyTaskConfig(directAssetConfig)) return directAssetConfig;
+
+  const queue = [payload];
+  const visited = new Set();
+  let inspected = 0;
+  while (queue.length > 0 && inspected < 5000) {
+    const current = queue.shift();
+    if (
+      !current ||
+      (typeof current !== "object" && typeof current !== "string")
+    )
+      continue;
+    if (typeof current === "string") {
+      if (!current.includes("DailyTaskConf")) continue;
+      try {
+        const parsed = JSON.parse(current);
+        if (isDailyTaskConfig(parsed)) return parsed;
+      } catch {
+        continue;
+      }
+      continue;
+    }
+    if (visited.has(current)) continue;
+    visited.add(current);
+    inspected += 1;
+    if (isDailyTaskConfig(current)) return current;
+    queue.push(...Object.values(current));
+  }
+  throw new Error("官方任务配置资源中未找到每日任务配置");
+}
+
+async function fetchOfficialJson(fetchConfig, url, label) {
+  let response;
+  try {
+    response = await fetchConfig(url, {
+      signal: AbortSignal.timeout(30000),
+    });
+  } catch (error) {
+    throw new Error(`${label}请求失败：${error.message || error}`);
+  }
+  if (!response?.ok) {
+    throw new Error(
+      `${label}读取失败：HTTP ${response?.status ?? "unknown"} (${url})`,
+    );
+  }
+  try {
+    return await response.json();
+  } catch (error) {
+    throw new Error(`${label}解析失败：${error.message || error}`);
+  }
+}
+
+async function loadCocosDailyTaskConfig(fetchConfig, version) {
+  const manifestUrl = `${OFFICIAL_RESOURCE_BASE}/remote/config/config.${version}.json`;
+  const manifest = await fetchOfficialJson(
+    fetchConfig,
+    manifestUrl,
+    "官方配置资源包",
+  );
+  if (isDailyTaskConfig(manifest)) return manifest;
+
+  const assetUrl = getCocosConfigAssetUrl(manifest);
+  const asset = await fetchOfficialJson(
+    fetchConfig,
+    assetUrl,
+    "官方任务配置资源",
+  );
+  return extractDailyTaskConfig(asset);
+}
+
+async function loadLegacyDailyTaskConfig(fetchConfig, version) {
+  const url = `${OFFICIAL_RESOURCE_BASE}/data/${version}/config.json`;
+  return fetchOfficialJson(fetchConfig, url, "官方旧版任务配置");
+}
+
 /**
  * Load task targets from the official data version returned by the game server.
  * Only immutable configuration is cached; role progress is never cached here.
@@ -173,13 +313,24 @@ export async function loadDailyTaskConfig(
     throw new Error("服务器未提供有效的任务配置版本");
   if (!configsByVersion.has(version)) {
     const loading = (async () => {
-      const response = await fetchConfig(
-        `https://xxz-xyzw-res.hortorgames.com/data/${version}/config.json`,
-        { signal: AbortSignal.timeout(30000) },
-      );
-      if (!response.ok) throw new Error("官方任务配置读取失败");
-      const config = await response.json();
-      return validateDailyTaskConfig(config);
+      let currentError;
+      try {
+        return validateDailyTaskConfig(
+          await loadCocosDailyTaskConfig(fetchConfig, version),
+        );
+      } catch (error) {
+        currentError = error;
+      }
+
+      try {
+        return validateDailyTaskConfig(
+          await loadLegacyDailyTaskConfig(fetchConfig, version),
+        );
+      } catch (legacyError) {
+        throw new Error(
+          `官方任务配置读取失败（版本 ${version}）：${currentError.message}；旧地址回退失败：${legacyError.message}`,
+        );
+      }
     })();
     configsByVersion.set(version, loading);
     loading.catch(() => {

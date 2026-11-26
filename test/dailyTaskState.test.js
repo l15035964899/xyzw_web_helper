@@ -141,7 +141,8 @@ test("failed config reads can be retried and unsafe versions are rejected", asyn
     },
   };
   const fetchConfig = async () => ({
-    ok: ++attempt > 1,
+    ok: ++attempt > 2,
+    status: 404,
     json: async () => officialConfig(),
   });
   await assert.rejects(
@@ -149,7 +150,7 @@ test("failed config reads can be retried and unsafe versions are rejected", asyn
     /读取失败/,
   );
   await loadDailyTaskConfig(store, "a", fetchConfig);
-  assert.equal(attempt, 2);
+  assert.equal(attempt, 3);
   await assert.rejects(
     loadDailyTaskConfig(
       {
@@ -162,6 +163,66 @@ test("failed config reads can be retried and unsafe versions are rejected", asyn
     ),
     /有效/,
   );
+});
+
+test("current Cocos config bundle resolves its serialized JSON asset", async () => {
+  const calls = [];
+  const store = {
+    sendMessageWithPromise: async () => ({
+      dataBundleVer: "test-cocos-bundle",
+    }),
+  };
+  const manifest = {
+    paths: { 0: ["config", 0] },
+    uuids: ["7cuVHMuxpM/41XwmFGubmZ"],
+    versions: { import: [0, "1c043"] },
+    importBase: "import",
+  };
+  const serializedAsset = [];
+  serializedAsset[5] = [[0, "config", officialConfig()]];
+  const fetchConfig = async (url) => {
+    calls.push(url);
+    return {
+      ok: true,
+      status: 200,
+      json: async () =>
+        url.endsWith("/config.test-cocos-bundle.json")
+          ? manifest
+          : serializedAsset,
+    };
+  };
+
+  const config = await loadDailyTaskConfig(store, "a", fetchConfig);
+  assert.equal(config.tasks.length, 3);
+  assert.deepEqual(calls, [
+    "https://xxz-xyzw-res.hortorgames.com/remote/config/config.test-cocos-bundle.json",
+    "https://xxz-xyzw-res.hortorgames.com/remote/config/import/7c/7cb951cc-bb1a-4cff-8d57-c26146b9b999.1c043.json",
+  ]);
+});
+
+test("legacy raw config endpoint remains available as a fallback", async () => {
+  const calls = [];
+  const store = {
+    sendMessageWithPromise: async () => ({
+      dataBundleVer: "test-legacy-fallback",
+    }),
+  };
+  const fetchConfig = async (url) => {
+    calls.push(url);
+    if (url.includes("/remote/config/")) {
+      return { ok: false, status: 404 };
+    }
+    return {
+      ok: true,
+      status: 200,
+      json: async () => officialConfig(),
+    };
+  };
+
+  const config = await loadDailyTaskConfig(store, "a", fetchConfig);
+  assert.equal(config.tasks.length, 3);
+  assert.equal(calls.length, 2);
+  assert.match(calls[1], /\/data\/test-legacy-fallback\/config\.json$/);
 });
 
 test("duplicate point-reward IDs are rejected before duplicate claims can be scheduled", () => {
@@ -178,16 +239,22 @@ test("an evicted failed config request cannot remove a newer cached request for 
   const started = new Promise((resolve) => {
     entered = resolve;
   });
+  let firstRequest = true;
   let readsA = 0;
   const store = {
     sendMessageWithPromise: async (id) => ({ dataBundleVer: id }),
   };
   const fetchConfig = async (url) => {
-    if (url.includes("cache-race-a") && ++readsA === 1) {
-      entered();
-      return new Promise((resolve, reject) => {
-        rejectFirst = reject;
-      });
+    if (url.includes("cache-race-a")) {
+      readsA += 1;
+      if (url.includes("/remote/config/") && firstRequest) {
+        firstRequest = false;
+        entered();
+        return new Promise((resolve, reject) => {
+          rejectFirst = reject;
+        });
+      }
+      if (url.includes("/data/")) return { ok: false, status: 404 };
     }
     return { ok: true, json: async () => officialConfig() };
   };
@@ -199,5 +266,5 @@ test("an evicted failed config request cannot remove a newer cached request for 
   rejectFirst(new Error("first request failed"));
   await rejected;
   await loadDailyTaskConfig(store, "cache-race-a", fetchConfig);
-  assert.equal(readsA, 2);
+  assert.equal(readsA, 3);
 });
