@@ -3,6 +3,7 @@ import test from "node:test";
 import { isBusinessServerError } from "../render-backend/lib/dailyTaskRunner.js";
 import {
   __test,
+  dailyTaskResultSummary,
   runArenaFights,
   runResetBottles,
   runXuanwuBlessing,
@@ -54,6 +55,30 @@ test("negative game business codes skip one daily step instead of aborting the a
   assert.equal(isBusinessServerError("[3500020] 没有可领取的奖励"), true);
   assert.equal(isBusinessServerError("服务器错误: 1700010"), true);
   assert.equal(isBusinessServerError("请求超时: role_getroleinfo"), false);
+});
+
+test("daily task summary only succeeds after every step is complete", () => {
+  assert.deepEqual(dailyTaskResultSummary({ incomplete: 0, failed: 0 }), {
+    cmd: "dailyBundle",
+    success: true,
+    status: "success",
+    deferred: false,
+    message: "服务器每日任务补差完成；待继续 0 项，失败 0 项",
+  });
+  assert.deepEqual(dailyTaskResultSummary({ incomplete: 1, failed: 1 }), {
+    cmd: "dailyBundle",
+    success: false,
+    status: "error",
+    deferred: true,
+    message: "服务器每日任务尚未完成；待继续 1 项，延期 0 项，失败 1 项",
+  });
+  assert.deepEqual(dailyTaskResultSummary({ deferred: 1 }), {
+    cmd: "dailyBundle",
+    success: false,
+    status: "warning",
+    deferred: true,
+    message: "服务器每日任务尚未完成；待继续 0 项，延期 1 项，失败 0 项",
+  });
 });
 
 test("Shanghai activity-date prefixes do not depend on the Render host timezone", () => {

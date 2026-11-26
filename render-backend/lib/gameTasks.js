@@ -138,13 +138,7 @@ export async function runDailyTasks(
       },
       taskSettings(token, task?.options),
     );
-    results.push({
-      cmd: "dailyBundle",
-      success: true,
-      message:
-        `服务器每日任务补差完成；待继续 ${result?.incomplete || 0} 项，` +
-        `失败 ${result?.failed || 0} 项`,
-    });
+    results.push(dailyTaskResultSummary(result));
   } catch (error) {
     results.push({
       cmd: "dailyBundle",
@@ -153,6 +147,22 @@ export async function runDailyTasks(
     });
   }
   return results;
+}
+
+export function dailyTaskResultSummary(result = {}) {
+  const incomplete = Math.max(0, Number(result.incomplete) || 0);
+  const failed = Math.max(0, Number(result.failed) || 0);
+  const deferred = Math.max(0, Number(result.deferred) || 0);
+  const complete = incomplete === 0 && failed === 0 && deferred === 0;
+  return {
+    cmd: "dailyBundle",
+    success: complete,
+    status: complete ? "success" : failed > 0 ? "error" : "warning",
+    deferred: incomplete > 0 || deferred > 0,
+    message: complete
+      ? "服务器每日任务补差完成；待继续 0 项，失败 0 项"
+      : `服务器每日任务尚未完成；待继续 ${incomplete} 项，延期 ${deferred} 项，失败 ${failed} 项`,
+  };
 }
 
 function pickArenaTargetId(targets) {
