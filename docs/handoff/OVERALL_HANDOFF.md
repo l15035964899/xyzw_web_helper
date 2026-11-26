@@ -3,7 +3,8 @@
 > 更新时间：2026-11-26 CST
 > 适用对象：第一次接手本项目的开发者或新会话
 > 当前分支：`main`
-> 当前 HEAD：`0de6c60`
+> 最近发布代码：`8e8b6d6`
+> 最近部署镜像：`ghcr.io/l15035964899/xyzw-nas-all:8e8b6d6-nightmare32`
 > 当前 Fork：`git@github.com:l15035964899/xyzw_web_helper.git`
 
 ## 0. 文档定位
@@ -25,7 +26,7 @@
 | --- | --- |
 | NAS | `192.168.0.222:3002` |
 | 容器 | `xyzw-nas-all`，`running / healthy` |
-| 镜像 | `ghcr.io/l15035964899/xyzw-nas-all:fd8241c-nightmare31` |
+| 镜像 | `ghcr.io/l15035964899/xyzw-nas-all:8e8b6d6-nightmare32` |
 | 存储 | `STORE_MODE=local` |
 | 健康接口 | `status=ok`、`activeCrons=11` |
 | NAS 账号 | 12 个，全部启用 |
