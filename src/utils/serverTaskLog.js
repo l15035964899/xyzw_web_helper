@@ -91,6 +91,7 @@ const TASK_TYPE_LABELS = {
   batchLegacyGiftSendEnhanced: "赠送功法残卷",
   batchUseItems: "使用怪异塔道具",
   batchMergeItems: "怪异塔合成",
+  batchUseAndMergeItems: "怪异塔领取+使用+合成",
   batchClaimPeachTasks: "领取蟠桃园任务",
   batchGenieSweep: "灯神扫荡",
   batchBuyDreamItems: "购买梦境商品",

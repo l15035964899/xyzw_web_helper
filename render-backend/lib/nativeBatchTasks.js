@@ -1042,47 +1042,127 @@ function collectMergeItems(gridMap) {
   return groups;
 }
 
-async function runMergeWeirdTowerItems(client, token, task) {
-  const { send } = createRunner(client, token, task);
-  let mergedRounds = 0;
-  for (let round = 0; round < 20; round += 1) {
-    const info = await send("mergebox_getinfo", { actType: 1 }, 5000);
-    if (!info?.mergeBox) break;
-    for (const taskId of Object.keys(info.mergeBox.taskMap || {})) {
-      if (
-        Number(info.mergeBox.taskMap[taskId] || 0) !== 0 &&
-        !info.mergeBox.taskClaimMap?.[taskId]
-      ) {
+function isPermanentWeirdTowerSkip(error) {
+  return String(error?.message || error || "").includes("200160");
+}
+
+async function runWeirdTowerMergeRound(send) {
+  let info;
+  try {
+    info = await send("mergebox_getinfo", { actType: 1 }, 5000);
+  } catch (error) {
+    if (isPermanentWeirdTowerSkip(error)) {
+      return {
+        ok: false,
+        unavailable: true,
+        merged: false,
+        claimed: false,
+      };
+    }
+    return { ok: false, merged: false, claimed: false };
+  }
+  if (!info?.mergeBox) {
+    return { ok: false, merged: false, claimed: false };
+  }
+
+  let claimed = false;
+  for (const taskId of Object.keys(info.mergeBox.taskMap || {})) {
+    if (
+      Number(info.mergeBox.taskMap[taskId] || 0) !== 0 &&
+      !info.mergeBox.taskClaimMap?.[taskId]
+    ) {
+      try {
         await send(
           "mergebox_claimmergeprogress",
           { actType: 1, taskId: Number(taskId) },
           3000,
-        ).catch(() => {});
-      }
-    }
-    const groups = collectMergeItems(info.mergeBox.gridMap);
-    if (!Object.values(groups).some((items) => items.length >= 2)) break;
-    const level8 = Number(info.mergeBox.taskMap?.["251212208"] || 0) !== 0;
-    if (level8) {
-      await send("mergebox_automergeitem", { actType: 1 }, 10000);
-    } else {
-      for (const items of Object.values(groups)) {
-        while (items.length >= 2) {
-          const source = items.shift();
-          const target = items.shift();
-          await send(
-            "mergebox_mergeitem",
-            {
-              actType: 1,
-              sourcePos: { gridX: source.x, gridY: source.y },
-              targetPos: { gridX: target.x, gridY: target.y },
-            },
-            3000,
-          ).catch(() => {});
-          await sleep(250);
+        );
+        claimed = true;
+      } catch (error) {
+        if (isPermanentWeirdTowerSkip(error)) {
+          return {
+            ok: false,
+            unavailable: true,
+            merged: false,
+            claimed,
+          };
         }
       }
+      await sleep(300);
     }
+  }
+
+  const groups = collectMergeItems(info.mergeBox.gridMap);
+  if (!Object.values(groups).some((items) => items.length >= 2)) {
+    return { ok: true, merged: false, claimed };
+  }
+
+  const level8 = Number(info.mergeBox.taskMap?.["251212208"] || 0) !== 0;
+  if (level8) {
+    try {
+      await send("mergebox_automergeitem", { actType: 1 }, 10000);
+      await sleep(1200);
+      return { ok: true, merged: true, claimed };
+    } catch (error) {
+      if (isPermanentWeirdTowerSkip(error)) {
+        return {
+          ok: false,
+          unavailable: true,
+          merged: false,
+          claimed,
+        };
+      }
+      return { ok: true, merged: false, claimed };
+    }
+  }
+
+  let merged = false;
+  for (const items of Object.values(groups)) {
+    while (items.length >= 2) {
+      const source = items.shift();
+      const target = items.shift();
+      try {
+        await send(
+          "mergebox_mergeitem",
+          {
+            actType: 1,
+            sourcePos: { gridX: source.x, gridY: source.y },
+            targetPos: { gridX: target.x, gridY: target.y },
+          },
+          3000,
+        );
+        merged = true;
+      } catch (error) {
+        if (isPermanentWeirdTowerSkip(error)) {
+          return {
+            ok: false,
+            unavailable: true,
+            merged,
+            claimed,
+          };
+        }
+      }
+      await sleep(250);
+    }
+  }
+  return { ok: true, merged, claimed };
+}
+
+async function runMergeWeirdTowerItems(client, token, task) {
+  const { send } = createRunner(client, token, task);
+  let mergedRounds = 0;
+  for (let round = 0; round < 20; round += 1) {
+    const result = await runWeirdTowerMergeRound(send);
+    if (result.unavailable) {
+      return {
+        cmd: "batchMergeItems",
+        success: true,
+        status: "warning",
+        message: "怪异塔合成模块未开启，已跳过",
+      };
+    }
+    if (!result.ok) throw new Error("获取合成盒子信息失败");
+    if (!result.merged && !result.claimed) break;
     mergedRounds += 1;
     await sleep(500);
   }
@@ -1090,6 +1170,148 @@ async function runMergeWeirdTowerItems(client, token, task) {
     cmd: "batchMergeItems",
     success: true,
     message: `怪异塔合成完成，共处理 ${mergedRounds} 轮`,
+  };
+}
+
+async function runUseAndMergeWeirdTowerItems(client, token, task) {
+  const { send } = createRunner(client, token, task);
+  let totalUsed = 0;
+  let mergeRounds = 0;
+  let consecutiveErrors = 0;
+  let stallRounds = 0;
+  let aborted = false;
+  const maxRounds = 50;
+  const maxConsecutiveErrors = 3;
+
+  try {
+    const freeInfo = await send("mergebox_getinfo", { actType: 1 }, 5000);
+    if (Number(freeInfo?.mergeBox?.freeEnergy || 0) > 0) {
+      await send("mergebox_claimfreeenergy", { actType: 1 }, 5000).catch(
+        () => {},
+      );
+    }
+  } catch (error) {
+    if (isPermanentWeirdTowerSkip(error)) {
+      return {
+        cmd: "batchUseAndMergeItems",
+        success: true,
+        status: "warning",
+        message: "怪异塔模块未开启，已跳过",
+      };
+    }
+  }
+
+  for (let round = 0; round < maxRounds; round += 1) {
+    let tower;
+    try {
+      tower = await send("evotower_getinfo", {}, 5000);
+      consecutiveErrors = 0;
+    } catch (error) {
+      if (isPermanentWeirdTowerSkip(error)) {
+        return {
+          cmd: "batchUseAndMergeItems",
+          success: true,
+          status: "warning",
+          message: "怪异塔模块未开启，已跳过",
+        };
+      }
+      consecutiveErrors += 1;
+      if (consecutiveErrors >= maxConsecutiveErrors) {
+        throw new Error("连续读取怪异塔信息失败");
+      }
+      await sleep(500);
+      continue;
+    }
+
+    let remaining = Number(tower?.evoTower?.lotteryLeftCnt || 0);
+    let info;
+    try {
+      info = await send("mergebox_getinfo", { actType: 1 }, 5000);
+    } catch (error) {
+      if (isPermanentWeirdTowerSkip(error)) {
+        return {
+          cmd: "batchUseAndMergeItems",
+          success: true,
+          status: "warning",
+          message: "怪异塔合成模块未开启，已跳过",
+        };
+      }
+      consecutiveErrors += 1;
+      if (consecutiveErrors >= maxConsecutiveErrors) {
+        throw new Error("连续读取合成盒信息失败");
+      }
+      await sleep(500);
+      continue;
+    }
+    let cost = Number(info?.mergeBox?.costTotalCnt || 0);
+    let usedThisRound = 0;
+    let openFailed = false;
+
+    while (remaining > 0) {
+      const pos =
+        cost < 2
+          ? { gridX: 4, gridY: 5 }
+          : cost < 102
+            ? { gridX: 7, gridY: 3 }
+            : { gridX: 6, gridY: 3 };
+      try {
+        await send("mergebox_openbox", { actType: 1, pos }, 8000);
+        cost += 1;
+        remaining -= 1;
+        totalUsed += 1;
+        usedThisRound += 1;
+        consecutiveErrors = 0;
+        await sleep(400);
+      } catch (error) {
+        if (isPermanentWeirdTowerSkip(error)) {
+          return {
+            cmd: "batchUseAndMergeItems",
+            success: true,
+            status: "warning",
+            message: "怪异塔合成模块未开启，已跳过",
+          };
+        }
+        openFailed = true;
+        break;
+      }
+    }
+
+    mergeRounds += 1;
+    const mergeResult = await runWeirdTowerMergeRound(send);
+    if (mergeResult.unavailable) {
+      return {
+        cmd: "batchUseAndMergeItems",
+        success: true,
+        status: "warning",
+        message: "怪异塔合成模块未开启，已跳过",
+      };
+    }
+    await send("mergebox_claimcostprogress", { actType: 1 }, 5000).catch(
+      () => {},
+    );
+
+    if (usedThisRound > 0) {
+      stallRounds = 0;
+    } else {
+      stallRounds += 1;
+    }
+    if (usedThisRound === 0 && !mergeResult.merged) {
+      if (!openFailed) break;
+      if (stallRounds >= maxConsecutiveErrors) {
+        aborted = true;
+        break;
+      }
+    }
+    await sleep(500);
+  }
+
+  return {
+    cmd: "batchUseAndMergeItems",
+    success: !aborted,
+    status: aborted ? "error" : undefined,
+    message: aborted
+      ? `怪异塔连续 ${maxConsecutiveErrors} 轮无法使用道具且合成无进展，已停止；已使用 ${totalUsed} 个钥匙`
+      : `怪异塔领取+使用+合成完成：使用钥匙 ${totalUsed} 个，合成 ${mergeRounds} 轮`,
   };
 }
 
@@ -1762,6 +1984,10 @@ export const NATIVE_TASK_CATALOG = {
   },
   batchUseItems: { name: "一键使用怪异塔道具", group: "weirdTower" },
   batchMergeItems: { name: "一键怪异塔合成", group: "weirdTower" },
+  batchUseAndMergeItems: {
+    name: "一键怪异塔领取+使用+合成",
+    group: "weirdTower",
+  },
   batchClaimPeachTasks: {
     name: "一键领取蟠桃园任务",
     group: "dungeon",
@@ -2001,6 +2227,8 @@ export async function runNativeBatchTask(key, client, context) {
       return [await runUseWeirdTowerItems(client, token, task)];
     case "batchMergeItems":
       return [await runMergeWeirdTowerItems(client, token, task)];
+    case "batchUseAndMergeItems":
+      return [await runUseAndMergeWeirdTowerItems(client, token, task)];
     case "batchClaimPeachTasks":
       return [await runPeachTasks(client, token, task)];
     case "batchGenieSweep":

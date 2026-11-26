@@ -61,6 +61,114 @@ test("batch box task applies configured type and count", async () => {
   assert.match(results[0].message, /25/);
 });
 
+test("weird tower aggregate skips accounts whose module is closed", async () => {
+  const calls = [];
+  const client = {
+    async sendWithPromise(cmd) {
+      calls.push(cmd);
+      throw new Error("[200160] 模块未开启");
+    },
+  };
+  const results = await runNativeBatchTask(
+    "batchUseAndMergeItems",
+    client,
+    { token: token(), task: { options: {} } },
+  );
+  assert.equal(results[0].success, true);
+  assert.equal(results[0].status, "warning");
+  assert.match(results[0].message, /模块未开启/);
+  assert.deepEqual(calls, ["mergebox_getinfo"]);
+});
+
+test("weird tower aggregate merges when the board is full and continues", async () => {
+  const calls = [];
+  let openAttempts = 0;
+  let remaining = 1;
+  let merged = false;
+  let cost = 0;
+  const client = {
+    async sendWithPromise(cmd, params = {}) {
+      calls.push({ cmd, params });
+      if (cmd === "evotower_getinfo") {
+        return { evoTower: { lotteryLeftCnt: remaining } };
+      }
+      if (cmd === "mergebox_getinfo") {
+        return {
+          mergeBox: {
+            freeEnergy: 0,
+            costTotalCnt: cost,
+            taskMap: {},
+            taskClaimMap: {},
+            gridMap: merged
+              ? {}
+              : {
+                  1: {
+                    1: { gridConfId: 0, gridItemId: 101, isLock: false },
+                    2: { gridConfId: 0, gridItemId: 101, isLock: false },
+                  },
+                },
+          },
+        };
+      }
+      if (cmd === "mergebox_openbox") {
+        openAttempts += 1;
+        if (openAttempts === 1) {
+          throw new Error("[12300040] 没有空格子了");
+        }
+        cost += 1;
+        remaining = Math.max(0, remaining - 1);
+        return {};
+      }
+      if (cmd === "mergebox_mergeitem") {
+        merged = true;
+        return {};
+      }
+      return {};
+    },
+  };
+  const results = await runNativeBatchTask(
+    "batchUseAndMergeItems",
+    client,
+    { token: token(), task: { options: {} } },
+  );
+  assert.equal(results[0].success, true);
+  assert.match(results[0].message, /使用钥匙 1 个/);
+  assert.ok(calls.some(({ cmd }) => cmd === "mergebox_mergeitem"));
+  assert.ok(calls.some(({ cmd }) => cmd === "mergebox_claimcostprogress"));
+});
+
+test("weird tower aggregate stops after three stalled merge rounds", async () => {
+  const client = {
+    async sendWithPromise(cmd) {
+      if (cmd === "evotower_getinfo") {
+        return { evoTower: { lotteryLeftCnt: 1 } };
+      }
+      if (cmd === "mergebox_getinfo") {
+        return {
+          mergeBox: {
+            freeEnergy: 0,
+            costTotalCnt: 0,
+            taskMap: {},
+            taskClaimMap: {},
+            gridMap: {},
+          },
+        };
+      }
+      if (cmd === "mergebox_openbox") {
+        throw new Error("[500000] 开箱失败");
+      }
+      return {};
+    },
+  };
+  const results = await runNativeBatchTask(
+    "batchUseAndMergeItems",
+    client,
+    { token: token(), task: { options: {} } },
+  );
+  assert.equal(results[0].success, false);
+  assert.match(results[0].message, /连续 3 轮/);
+});
+
 test("black market sync writes only a verified changed configuration", async () => {
   const calls = [];
   let items = [
