@@ -13,6 +13,16 @@ const FISH_TARGET = 320;
 const ARENA_TARGET = 240;
 const DEFAULT_WEIRD_TOWER_MAX_CLIMB = 100;
 const LEGACY_ITEM_ID = 37007;
+const LEGACY_MIN_COLLECT_MS = 60_000;
+const LEGACY_FIRST_REWARD_MS = 300_000;
+const LEGACY_COLLECT_SETTLE_MS = 1_500;
+const TEN_DAY_FREE_GIFT_ID = 17;
+const RECRUIT_WEEK_STORE_GOODS = {
+  activityId: 6,
+  goodsIndex: 0,
+  buyNum: 1,
+};
+const RECRUIT_WEEK_ACTIVITY_TYPE = 4;
 const ACCOUNT_SETTINGS_DEFAULTS = {
   arenaFormation: 1,
   towerFormation: 1,
@@ -84,6 +94,24 @@ const PEACH_TASK_TARGETS = {
 };
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+function getRecruitWeekStoreState(response) {
+  const activityRoot = response?.activity?.activity
+    ? response.activity
+    : response?.activity || response;
+  const activeActivity = (activityRoot?.activity || []).find(
+    (activity) => Number(activity?.id) === RECRUIT_WEEK_STORE_GOODS.activityId,
+  );
+  const complete =
+    Number(
+      activityRoot?.myStoreInfo?.[RECRUIT_WEEK_STORE_GOODS.activityId]
+        ?.complete?.[RECRUIT_WEEK_STORE_GOODS.goodsIndex] || 0,
+    ) > 0;
+  return {
+    active: Number(activeActivity?.type) === RECRUIT_WEEK_ACTIVITY_TYPE,
+    complete,
+  };
+}
 
 function numberOption(options, key, fallback, { min, max } = {}) {
   const raw = options?.[key];
@@ -1347,6 +1375,80 @@ async function runApplyLegion(client, token, task) {
   };
 }
 
+export async function claimLegacyHangUp(
+  client,
+  {
+    minCollectMs = LEGACY_MIN_COLLECT_MS,
+    firstRewardMs = LEGACY_FIRST_REWARD_MS,
+    settleMs = LEGACY_COLLECT_SETTLE_MS,
+    wait = sleep,
+    now = Date.now,
+    deferUntilReady = false,
+  } = {},
+) {
+  const info = await client.sendWithPromise("legacy_getinfo", {}, 8000);
+  let hangUpBeginTime = Number(info?.roleLegacy?.hangUpBeginTime || 0);
+  let produceItemCnt = Number(info?.roleLegacy?.produceItemCnt || 0);
+  let startedNow = false;
+
+  if (hangUpBeginTime <= 0) {
+    const started = await client.sendWithPromise(
+      "legacy_beginhangup",
+      {},
+      8000,
+    );
+    hangUpBeginTime = Number(
+      started?.roleLegacy?.hangUpBeginTime || client.serverTime || now(),
+    );
+    produceItemCnt = Number(started?.roleLegacy?.produceItemCnt || 0);
+    startedNow = true;
+  }
+
+  const serverNow = Number(client.serverTime || now());
+  const elapsedMs = Math.max(0, serverNow - hangUpBeginTime);
+  const readyAfterMs = Math.max(minCollectMs, firstRewardMs) + settleMs;
+  const waitMs = produceItemCnt > 0 ? 0 : Math.max(0, readyAfterMs - elapsedMs);
+  if (waitMs > 0) {
+    if (deferUntilReady) {
+      return { startedNow, deferred: true, waitMs, claim: null };
+    }
+    await wait(waitMs);
+  }
+
+  let claim;
+  try {
+    claim = await client.sendWithPromise("legacy_claimhangup", {}, 8000);
+  } catch (error) {
+    if (String(error?.message).includes("12400000")) {
+      return {
+        startedNow,
+        deferred: false,
+        rateLimited: true,
+        waitMs: 0,
+        claim: null,
+        error: error.message,
+      };
+    }
+    if (/800040|12400160/.test(String(error?.message))) {
+      if (deferUntilReady) {
+        return {
+          startedNow,
+          deferred: true,
+          waitMs: Math.max(waitMs, LEGACY_FIRST_REWARD_MS),
+          claim: null,
+          error: error.message,
+        };
+      }
+    } else {
+      throw error;
+    }
+    await wait(settleMs + 3_000);
+    claim = await client.sendWithPromise("legacy_claimhangup", {}, 8000);
+  }
+
+  return { startedNow, deferred: false, waitMs, claim };
+}
+
 async function runLegacyGift(client, token, task) {
   const { options, send } = createRunner(client, token, task);
   const recipientId = requiredNumberOption(options, "recipientId");
@@ -1614,6 +1716,16 @@ export const NATIVE_TASK_CATALOG = {
     name: "免费领取珍宝阁",
     group: "daily",
   },
+  activity_claimrolluppack: {
+    name: "一键领取十殿礼包",
+    group: "daily",
+    description: "领取主页十殿礼包中的第一个免费礼包",
+  },
+  activity_buystoregoods: {
+    name: "领取招募周限时商店",
+    group: "daily",
+    description: "领取招募周限时商店的第一个免费礼包；其他周常轮换需重新确认",
+  },
   batchLegacyClaim: {
     name: "批量领取功法残卷",
     group: "legacy",
@@ -1751,9 +1863,127 @@ export async function runNativeBatchTask(key, client, context) {
         }
         throw error;
       }
-    case "batchLegacyClaim":
-      await client.sendWithPromise("legacy_claimhangup", {}, 5000);
-      return [{ cmd: key, success: true, message: "功法残卷领取完成" }];
+    case "activity_claimrolluppack":
+      try {
+        await client.sendWithPromise(
+          "activity_claimrolluppack",
+          { id: TEN_DAY_FREE_GIFT_ID },
+          5000,
+        );
+        return [{ cmd: key, success: true, message: "十殿免费礼包领取完成" }];
+      } catch (error) {
+        const errorText = String(error.message);
+        if (/12000116|1000020|700020|3500020/.test(errorText)) {
+          return [
+            {
+              cmd: key,
+              success: true,
+              status: "info",
+              message: "十殿免费礼包今日已经领取",
+            },
+          ];
+        }
+        if (/200020/.test(errorText)) {
+          return [
+            {
+              cmd: key,
+              success: true,
+              status: "warning",
+              message:
+                "十殿免费礼包可能已经领取（服务器返回 200020），未重试",
+            },
+          ];
+        }
+        throw error;
+      }
+    case "activity_buystoregoods":
+      {
+        const activityResponse = await client.sendWithPromise(
+          "activity_get",
+          {},
+          8000,
+        );
+        const weeklyState = getRecruitWeekStoreState(activityResponse);
+        if (!weeklyState.active) {
+          return [
+            {
+              cmd: key,
+              success: true,
+              status: "info",
+              message: "当前不是招募周，跳过限时商店领取",
+            },
+          ];
+        }
+        if (weeklyState.complete) {
+          return [
+            {
+              cmd: key,
+              success: true,
+              status: "info",
+              message: "招募周限时商店本周已经领取",
+            },
+          ];
+        }
+      }
+      try {
+        await client.sendWithPromise(
+          "activity_buystoregoods",
+          { ...RECRUIT_WEEK_STORE_GOODS },
+          5000,
+        );
+        return [
+          {
+            cmd: key,
+            success: true,
+            message: "招募周限时商店奖励领取完成",
+          },
+        ];
+      } catch (error) {
+        const errorText = String(error.message);
+        if (/1100010/.test(errorText)) {
+          return [
+            {
+              cmd: key,
+              success: true,
+              status: "warning",
+              message: "招募周限时商店本周已经领取",
+            },
+          ];
+        }
+        if (/12000116|1000020|700020|7900023/.test(errorText)) {
+          return [
+            {
+              cmd: key,
+              success: true,
+              status: "warning",
+              message: "招募周限时商店本周已经领取",
+            },
+          ];
+        }
+        throw error;
+      }
+    case "batchLegacyClaim": {
+      const result = await claimLegacyHangUp(client, {
+        deferUntilReady: true,
+      });
+      return [
+        {
+          cmd: key,
+          success: true,
+          status: result.deferred ? "info" : "success",
+          deferred: result.deferred,
+          message: result.rateLimited
+            ? "领取过于频繁，奖励保留到下次定时执行"
+            : result.deferred
+              ? result.startedNow
+                ? "功法残卷收集已自动开始，奖励成熟后将自动领取"
+                : "功法残卷奖励尚未成熟，稍后自动领取"
+              : result.startedNow
+                ? "功法残卷已自动开始收集并领取完成"
+                : "功法残卷领取完成",
+        },
+      ];
+    }
     case "batchLegacyGiftSendEnhanced":
       return [await runLegacyGift(client, token, task)];
     case "batchUseItems":
