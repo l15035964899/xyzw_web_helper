@@ -1829,11 +1829,7 @@
                 {{ formatTaskLastRun(task.lastRunAt) }}
               </td>
               <td class="task-time-cell task-next-cell">
-                {{
-                  task.enabled
-                    ? taskCountdowns[task.id]?.formatted || "计算中..."
-                    : "已禁用"
-                }}
+                {{ formatTaskNextRun(task) }}
               </td>
               <td>
                 {{ task.selectedTokens.length }} /
@@ -3134,6 +3130,7 @@ import {
   createTasksXuanwuBlessing,
   fishTypeOptions,
   formationOptions,
+  formatLogTime,
   formatTimeDifference,
   getTodayStartSec,
   isTodayAvailable,
@@ -4753,6 +4750,23 @@ const formatTaskLastRun = (value) => {
   });
 };
 
+const formatTaskNextRun = (task) => {
+  if (!task.enabled) return "已禁用";
+  const serverNext = new Date(task.nextRunAt).getTime();
+  const calculatedNext = Number(nextExecutionTimes.value[task.id]);
+  const next =
+    Number.isFinite(serverNext) && serverNext > 0
+      ? serverNext
+      : Number.isFinite(calculatedNext) && calculatedNext > 0
+        ? calculatedNext
+        : Number(calculateNextExecutionTime(task));
+  if (!Number.isFinite(next) || next <= 0) return "未知";
+  return new Date(next).toLocaleString("zh-CN", {
+    timeZone: "Asia/Shanghai",
+    hour12: false,
+  });
+};
+
 watch(taskListSearch, () => {
   taskListPage.value = 1;
 });
@@ -6001,9 +6015,13 @@ const getValidGroupTokenIds = (groupId) => {
 // 注: pickArenaTargetId, FISH_TARGET, ARENA_TARGET, getTodayStartSec, isTodayAvailable, calculateMonthProgress 已从 @/utils/batch 导入
 
 const addLog = (log) => {
+  const normalizedLog = {
+    ...log,
+    time: formatLogTime(log.time),
+  };
   // 添加日志数据到数组
-  logs.value.push(log);
-  queueBrowserLog(log);
+  logs.value.push(normalizedLog);
+  queueBrowserLog(normalizedLog);
 
   // 限制logs数组大小，防止内存占用过大
   const maxLogEntries = batchSettings.maxLogEntries || 1000;
@@ -6483,13 +6501,17 @@ const startBatch = async () => {
         },
         manualSettings,
       );
-      tokenStatus.value[tokenId] = result.incomplete ? "pending" : "completed";
+      const incomplete = Number(result.incomplete) || 0;
+      const failed = Number(result.failed) || 0;
+      const deferred = Number(result.deferred) || 0;
+      const complete = incomplete === 0 && failed === 0 && deferred === 0;
+      tokenStatus.value[tokenId] = complete ? "completed" : "pending";
       addLog({
         time: new Date().toLocaleTimeString(),
-        message: result.incomplete
-          ? `=== ${token.name} 本轮结束，${result.incomplete} 个步骤待继续 ===`
-          : `=== ${token.name} 执行完成 ===`,
-        type: result.incomplete ? "warning" : "success",
+        message: complete
+          ? `=== ${token.name} 执行完成 ===`
+          : `=== ${token.name} 本轮未完成，${incomplete} 个步骤待继续，${deferred} 个步骤延期，${failed} 个步骤失败 ===`,
+        type: complete ? "success" : "warning",
       });
     } catch (error) {
       tokenStatus.value[tokenId] = error.interrupted ? "stopped" : "failed";
@@ -6801,6 +6823,9 @@ const stopBatch = () => {
 .time {
   color: #999;
   margin-right: 8px;
+  display: inline-block;
+  min-width: 110px;
+  white-space: nowrap;
 }
 
 .task-table-toolbar {

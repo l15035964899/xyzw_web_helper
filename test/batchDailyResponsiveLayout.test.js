@@ -29,16 +29,20 @@ test("batch daily header uses responsive toolbar groups", () => {
 });
 
 test("log controls can wrap instead of collapsing Chinese labels", () => {
-  assert.match(
-    source,
-    /\.log-header-controls\s*\{[^}]*flex-wrap:\s*wrap/,
-  );
+  assert.match(source, /\.log-header-controls\s*\{[^}]*flex-wrap:\s*wrap/);
 });
 
 test("scheduled task modal uses a compact paginated table with last run", () => {
   assert.match(source, /class="task-table"/);
+  assert.match(
+    source,
+    /即将执行：\{\{ shortestCountdownTask\.task\.name \}\}/,
+  );
+  assert.match(source, /shortestCountdownTask\.countdown\.formatted/);
   assert.match(source, /上次执行/);
   assert.match(source, /formatTaskLastRun\(task\.lastRunAt\)/);
+  assert.match(source, /formatTaskNextRun\(task\)/);
+  assert.doesNotMatch(source, /taskCountdowns\[task\.id\]\?\.formatted/);
   assert.match(source, /paginatedScheduledTasks/);
   assert.match(source, /\[5, 10, 20, 50\]/);
 });
@@ -47,9 +51,6 @@ test("scheduled task groups map local tokens to NAS account IDs", () => {
   assert.match(source, /mapLocalTokenIdsToScheduleIds/);
   assert.match(source, /getScheduleGroupTokenIds/);
   assert.match(source, /isScheduleGroupSelected\(group\.id\)/);
-  assert.match(
-    source,
-    /@click="toggleScheduleGroupSelection\(group\.id\)"/,
-  );
+  assert.match(source, /@click="toggleScheduleGroupSelection\(group\.id\)"/);
   assert.doesNotMatch(source, /taskScheduleSelectedGroupIds/);
 });

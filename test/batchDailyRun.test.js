@@ -39,6 +39,8 @@ function fixture({
   connectionSucceeds = true,
   runError = null,
   incomplete = 0,
+  failed = 0,
+  deferred = 0,
 } = {}) {
   const logs = [];
   const state = { runs: 0, closed: 0, connected };
@@ -89,7 +91,7 @@ function fixture({
       async run() {
         state.runs++;
         if (runError) throw runError;
-        return { incomplete };
+        return { incomplete, failed, deferred };
       }
     },
   };
@@ -133,6 +135,20 @@ test("batch releases the new connection it owns and respects the runner's pendin
   assert.equal(f.state.closed, 1);
   assert.equal(f.context.connectionQueue.active, 1);
   assert.equal(f.context.tokenStatus.value["account-a"], "pending");
+});
+
+test("batch marks an account pending when the runner reports failed steps", async () => {
+  const f = fixture({ failed: 1 });
+  await f.startBatch();
+  assert.equal(f.context.tokenStatus.value["account-a"], "pending");
+  assert.match(f.logs.at(-2).message, /1 个步骤失败/);
+});
+
+test("batch marks an account pending when the runner defers a step", async () => {
+  const f = fixture({ deferred: 1 });
+  await f.startBatch();
+  assert.equal(f.context.tokenStatus.value["account-a"], "pending");
+  assert.match(f.logs.at(-2).message, /1 个步骤延期/);
 });
 
 test("stop while waiting for a connection slot does not acquire a slot", async () => {
