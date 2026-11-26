@@ -166,9 +166,14 @@ import {
 import { useRouter } from "vue-router";
 import {
   buildMultiGameFrameSrc,
+  clearGameSessionBinData,
+  clearMultiGameLaunch,
   closeMultiGameSession,
+  forgetAllGameSessions,
+  forgetGameSession,
   moveMultiGameSession,
   readActiveMultiGameLaunch,
+  reseedGameSessionBin,
   resolveMultiGameFrameMessage,
 } from "@/utils/gameLauncher";
 
@@ -279,11 +284,29 @@ function armFrameTimeout(scopeId) {
 function markFrameFatal(scopeId) {
   clearFrameTimeout(scopeId);
   if (frameStates[scopeId]) frameStates[scopeId].status = "fatal";
+  clearGameSessionBinData({
+    scopeId,
+    localStorage: window.localStorage,
+  });
 }
 
 function reloadFrame(scopeId) {
   const state = frameStates[scopeId];
   if (!state) return;
+  const frame = frames.value.find((item) => item.scopeId === scopeId);
+  if (
+    frame &&
+    !reseedGameSessionBin({
+      scopeId,
+      tokenId: frame.tokenId,
+      localStorage: window.localStorage,
+    })
+  ) {
+    state.status = "fatal";
+    // eslint-disable-next-line no-alert -- Preserve the existing native notification or confirmation flow.
+    window.alert("BIN 临时数据已失效，请返回 Token 管理后重新打开。");
+    return;
+  }
   frameElements.delete(scopeId);
   state.status = "loading";
   state.revision += 1;
@@ -403,6 +426,7 @@ function closeFrame(frame) {
     });
     clearFrameTimeout(frame.scopeId);
     frameElements.delete(frame.scopeId);
+    forgetGameSession(frame.scopeId);
     delete frameStates[frame.scopeId];
     launch.value = updatedLaunch;
   } catch (error) {
@@ -422,10 +446,22 @@ function handleMessage(event) {
   if (result && frameStates[result.scopeId]) {
     clearFrameTimeout(result.scopeId);
     frameStates[result.scopeId].status = result.status;
+    clearGameSessionBinData({
+      scopeId: result.scopeId,
+      localStorage: window.localStorage,
+    });
   }
 }
 
 function goToTokens() {
+  try {
+    clearMultiGameLaunch({
+      localStorage: window.localStorage,
+      sessionStorage: window.sessionStorage,
+    });
+  } catch {
+    // Navigation cleanup remains best effort.
+  }
   router.push("/tokens");
 }
 
@@ -437,6 +473,15 @@ onUnmounted(() => {
   window.removeEventListener("message", handleMessage);
   stopStripScrollAnimation();
   for (const scopeId of frameTimeouts.keys()) clearFrameTimeout(scopeId);
+  try {
+    clearMultiGameLaunch({
+      localStorage: window.localStorage,
+      sessionStorage: window.sessionStorage,
+    });
+  } catch {
+    // Navigation cleanup remains best effort.
+  }
+  forgetAllGameSessions();
 });
 </script>
 

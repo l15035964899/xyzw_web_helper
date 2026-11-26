@@ -764,7 +764,6 @@ import {
   SyncCircle,
   TrashBin,
 } from "@vicons/ionicons5";
-import lz4 from "lz4js";
 import { NAlert, NIcon, useDialog, useMessage } from "naive-ui";
 import { computed, h, onMounted, onUnmounted, reactive, ref, watch } from "vue";
 import { useRouter } from "vue-router";
@@ -780,7 +779,11 @@ import {
   getRoleBinFileName,
 } from "@/utils/binFile";
 import { restoreFullBackup, validateBackup } from "@/utils/fullBackup";
-import { prepareMultiGameLaunch } from "@/utils/gameLauncher";
+import {
+  prepareMultiGameLaunch,
+  prepareSingleGameLaunch,
+  resolveGameBinBuffer,
+} from "@/utils/gameLauncher";
 import {
   pruneTokenSelection,
   selectAllTokenIds,
@@ -1955,69 +1958,6 @@ const goToPushingLevels = () => {
   router.push("/admin/PushingLevels");
 };
 
-// ============ BIN 格式转换（来自 convertBin.mjs） ============
-
-function extractKey(bytes) {
-  return (
-    (((bytes[2] >> 6) & 1) << 7) |
-    (((bytes[2] >> 4) & 1) << 6) |
-    (((bytes[2] >> 2) & 1) << 5) |
-    ((bytes[2] & 1) << 4) |
-    (((bytes[3] >> 6) & 1) << 3) |
-    (((bytes[3] >> 4) & 1) << 2) |
-    (((bytes[3] >> 2) & 1) << 1) |
-    (bytes[3] & 1)
-  );
-}
-
-function encodeKey(bytes, r) {
-  bytes[2] =
-    (bytes[2] & 0b10101010) |
-    (((r >> 7) & 1) << 6) |
-    (((r >> 6) & 1) << 4) |
-    (((r >> 5) & 1) << 2) |
-    ((r >> 4) & 1);
-  bytes[3] =
-    (bytes[3] & 0b10101010) |
-    (((r >> 3) & 1) << 6) |
-    (((r >> 2) & 1) << 4) |
-    (((r >> 1) & 1) << 2) |
-    (r & 1);
-}
-
-function xDecrypt(buf) {
-  const e = new Uint8Array(buf);
-  const t = extractKey(e);
-  const out = new Uint8Array(e);
-  for (let n = out.length; --n >= 4;) out[n] ^= t;
-  return out.subarray(4);
-}
-
-function lxEncrypt(plain) {
-  const compressed = lz4.compress(plain);
-  const out = new Uint8Array(compressed.length);
-  out.set(compressed);
-  const r = 2 + ~~(Math.random() * 248);
-  for (let n = Math.min(out.length, 100); --n >= 0;) out[n] ^= r;
-  out[0] = 112; // 'p'
-  out[1] = 108; // 'l'
-  encodeKey(out, r);
-  return out;
-}
-
-function convertBinToLx(buf) {
-  const e = new Uint8Array(buf);
-  // 已经是 lx 格式
-  if (e.length > 4 && e[0] === 112 && e[1] === 108) return e;
-  // x 格式，转换为 lx
-  if (e.length > 4 && e[0] === 112 && e[1] === 120) {
-    const plain = xDecrypt(e);
-    return lxEncrypt(plain);
-  }
-  // 其他格式原样返回
-  return e;
-}
-
 async function openSelectedGames() {
   if (selectedMultiGameTokens.value.length === 0 || isOpeningMultiGame.value)
     return;
@@ -2026,7 +1966,10 @@ async function openSelectedGames() {
   try {
     const { launch, failures } = await prepareMultiGameLaunch({
       tokens: tokensToOpen,
-      getArrayBuffer,
+      getArrayBuffer: async (tokenId) => {
+        const token = tokensToOpen.find((item) => item.id === tokenId);
+        return token ? resolveGameBinBuffer(token, { getArrayBuffer }) : null;
+      },
       localStorage: window.localStorage,
       sessionStorage: window.sessionStorage,
     });
@@ -2054,34 +1997,28 @@ const openGame = async () => {
     message.warning("请先选择一个Token");
     return;
   }
-  // 从 IndexedDB 获取 BIN 数据，同步到 localStorage
-  const binData = await getArrayBuffer(token.id);
-  if (!binData) {
-    message.error("未找到该Token的BIN数据");
-    return;
-  }
-  // 转换为 lx 格式后存入 localStorage
-  const converted = convertBinToLx(binData);
-  const hex = Array.from(converted)
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
-  localStorage.setItem(`bin_data_${token.id}`, hex);
-  localStorage.setItem("current_bin_id", token.id);
-  let binList = [];
   try {
-    binList = JSON.parse(localStorage.getItem("bin_file_list") || "[]");
-  } catch (e) {}
-  if (!binList.find((i) => i.id === token.id)) {
-    binList.push({
-      id: token.id,
-      name: token.name || "Token",
-      byteLength: binData.byteLength,
-      size: `${(binData.byteLength / 1024).toFixed(1)} KB`,
-      order: binList.length,
+    const binData = await resolveGameBinBuffer(token, { getArrayBuffer });
+    if (!binData) {
+      message.error("该账号在 NAS 和本机都没有可用的 BIN");
+      return;
+    }
+    const { launch } = await prepareSingleGameLaunch({
+      token,
+      getArrayBuffer: async (tokenId) =>
+        tokenId === token.id ? binData : null,
+      localStorage: window.localStorage,
+      sessionStorage: window.sessionStorage,
     });
-    localStorage.setItem("bin_file_list", JSON.stringify(binList));
+    if (!launch.sessions.length) {
+      message.error("BIN 数据无法用于启动游戏");
+      return;
+    }
+    await router.push("/game");
+  } catch (error) {
+    console.error("Open game failed:", error);
+    message.error(error.message || "打开游戏失败，请重试");
   }
-  router.push("/game");
 };
 
 // 开始任务管理 - 直接跳转到控制台

@@ -778,6 +778,7 @@ app.get("/health", (req, res) => {
 
 app.use(createAppAuthMiddleware());
 // API routes accept either the shared API key or the authenticated web session.
+const apiKeyOnly = createApiKeyMiddleware(() => process.env.API_KEY);
 app.use(
   "/api",
   createApiKeyMiddleware(
@@ -882,6 +883,39 @@ app.post("/api/logs/db/batch", async (req, res) => {
 app.get("/api/tokens", async (req, res) => {
   try {
     res.json(await dataStore.listTokens());
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post("/api/tokens/:id/game-bin", apiKeyOnly, async (req, res) => {
+  try {
+    const token = (await dataStore.listTokens()).find(
+      (entry) => String(entry.id) === String(req.params.id),
+    );
+    if (!token) return res.status(404).json({ error: "账号不存在" });
+    const credential = await dataStore.getTokenRefreshCredential?.(
+      req.params.id,
+    );
+    if (!credential?.bin) {
+      return res.status(404).json({ error: "NAS 未保存该账号的 BIN" });
+    }
+    const body = Buffer.isBuffer(credential.bin)
+      ? credential.bin
+      : Buffer.from(credential.bin);
+    if (body.length === 0 || body.length > 2 * 1024 * 1024) {
+      return res.status(422).json({ error: "账号 BIN 数据无效" });
+    }
+    res.set({
+      "Cache-Control": "no-store, private",
+      "Content-Disposition": 'attachment; filename="game.bin"',
+      "Content-Length": String(body.length),
+      "Content-Type": "application/octet-stream",
+      Expires: "0",
+      Pragma: "no-cache",
+      "X-Content-Type-Options": "nosniff",
+    });
+    res.end(body);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }

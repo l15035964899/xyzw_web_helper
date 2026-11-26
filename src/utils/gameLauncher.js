@@ -1,8 +1,10 @@
 import lz4 from "lz4js";
 
 export const MULTI_GAME_ACTIVE_LAUNCH_KEY = "multi-game_active_launch_v1";
+export const SINGLE_GAME_ACTIVE_LAUNCH_KEY = "single-game_active_launch_v1";
 
 const SCOPE_PATTERN = /^mg-[a-f0-9]{32}$/;
+const rememberedLaunchBins = new Map();
 const FAILURE_REASONS = new Set([
   "missing-bin",
   "read-failed",
@@ -139,6 +141,12 @@ export function buildMultiGameFrameSrc(baseUrl, session) {
   return `${normalizeBaseUrl(baseUrl)}game/multi-game.html?scope=${scope}&bin_id=${tokenId}`;
 }
 
+export function buildSingleGameFrameSrc(baseUrl, session) {
+  const scope = encodeURIComponent(session.scopeId);
+  const tokenId = encodeURIComponent(session.tokenId);
+  return `${normalizeBaseUrl(baseUrl)}game/multi-game.html?scope=${scope}&bin_id=${tokenId}`;
+}
+
 export function resolveMultiGameFrameMessage({
   event,
   expectedOrigin,
@@ -172,11 +180,9 @@ export function convertBinToLx(buffer, random = Math.random) {
   return bytes;
 }
 
-export function readActiveMultiGameLaunch(storage) {
+function readActiveLaunch(storage, storageKey) {
   try {
-    const parsed = JSON.parse(
-      storage.getItem(MULTI_GAME_ACTIVE_LAUNCH_KEY) || "null",
-    );
+    const parsed = JSON.parse(storage.getItem(storageKey) || "null");
     if (
       parsed?.version !== 1 ||
       typeof parsed.id !== "string" ||
@@ -194,17 +200,42 @@ export function readActiveMultiGameLaunch(storage) {
   }
 }
 
-export function clearMultiGameLaunch({ localStorage, sessionStorage }) {
-  const previous = readActiveMultiGameLaunch(sessionStorage);
+export function readActiveMultiGameLaunch(storage) {
+  return readActiveLaunch(storage, MULTI_GAME_ACTIVE_LAUNCH_KEY);
+}
+
+export function readActiveSingleGameLaunch(storage) {
+  return readActiveLaunch(storage, SINGLE_GAME_ACTIVE_LAUNCH_KEY);
+}
+
+function clearGameLaunch({ localStorage, sessionStorage, storageKey }) {
+  const previous = readActiveLaunch(sessionStorage, storageKey);
   if (previous) {
     for (const gameSession of previous.sessions) {
       const prefix = `multi-game:${gameSession.scopeId}:`;
       for (const key of storageKeys(localStorage)) {
         if (key.startsWith(prefix)) localStorage.removeItem(key);
       }
+      rememberedLaunchBins.delete(gameSession.scopeId);
     }
   }
-  sessionStorage.removeItem(MULTI_GAME_ACTIVE_LAUNCH_KEY);
+  sessionStorage.removeItem(storageKey);
+}
+
+export function clearMultiGameLaunch({ localStorage, sessionStorage }) {
+  clearGameLaunch({
+    localStorage,
+    sessionStorage,
+    storageKey: MULTI_GAME_ACTIVE_LAUNCH_KEY,
+  });
+}
+
+export function clearSingleGameLaunch({ localStorage, sessionStorage }) {
+  clearGameLaunch({
+    localStorage,
+    sessionStorage,
+    storageKey: SINGLE_GAME_ACTIVE_LAUNCH_KEY,
+  });
 }
 
 export function closeMultiGameSession({
@@ -238,6 +269,7 @@ export function closeMultiGameSession({
       // The persisted manifest remains authoritative even if cleanup is blocked.
     }
   }
+  rememberedLaunchBins.delete(target.scopeId);
   return updatedLaunch;
 }
 
@@ -273,7 +305,51 @@ export function moveMultiGameSession({ scopeId, direction, sessionStorage }) {
   return updatedLaunch;
 }
 
-export async function prepareMultiGameLaunch({
+function toArrayBuffer(value) {
+  if (value instanceof ArrayBuffer) return value;
+  if (ArrayBuffer.isView(value)) {
+    return value.buffer.slice(
+      value.byteOffset,
+      value.byteOffset + value.byteLength,
+    );
+  }
+  if (Array.isArray(value)) return Uint8Array.from(value).buffer;
+  if (value?.type === "Buffer" && Array.isArray(value.data)) {
+    return Uint8Array.from(value.data).buffer;
+  }
+  return null;
+}
+
+export async function resolveGameBinBuffer(
+  token,
+  { getArrayBuffer, desktopBridge = globalThis.window?.xyzwDesktop } = {},
+) {
+  let remoteError = null;
+  if (typeof desktopBridge?.getGameBin === "function") {
+    try {
+      const result = await desktopBridge.getGameBin(String(token.id));
+      if (result?.ok) {
+        const data = toArrayBuffer(result.data);
+        if (data?.byteLength > 0) return data;
+        remoteError = "NAS 返回的 BIN 为空";
+      } else {
+        remoteError = result?.error || "从 NAS 读取 BIN 失败";
+      }
+    } catch (error) {
+      remoteError = error?.message || "从 NAS 读取 BIN 失败";
+    }
+  }
+
+  const local = toArrayBuffer(await getArrayBuffer?.(token.id));
+  if (local?.byteLength > 0) return local;
+  if (remoteError) {
+    throw new Error(`从 NAS 临时读取 BIN 失败：${remoteError}`);
+  }
+  return null;
+}
+
+async function prepareGameLaunch({
+  activeLaunchKey,
   tokens,
   getArrayBuffer,
   localStorage,
@@ -281,7 +357,11 @@ export async function prepareMultiGameLaunch({
   randomUUID = createCompatibleRandomUUID,
   now = () => Date.now(),
 }) {
-  clearMultiGameLaunch({ localStorage, sessionStorage });
+  clearGameLaunch({
+    localStorage,
+    sessionStorage,
+    storageKey: activeLaunchKey,
+  });
   const launchId = `launch-${uuidHex(randomUUID)}`;
   const prepared = await Promise.all(
     tokens.map(async (token) => {
@@ -329,6 +409,7 @@ export async function prepareMultiGameLaunch({
   const sessions = [];
   const failures = [];
   const localEntries = [];
+  const rememberedBins = [];
   for (const result of prepared) {
     if (result.failure) {
       failures.push(result.failure);
@@ -360,6 +441,7 @@ export async function prepareMultiGameLaunch({
       ],
     );
     sessions.push({ tokenId: result.token.id, name, scopeId, order });
+    rememberedBins.push([scopeId, new Uint8Array(result.bytes)]);
   }
 
   const launch = {
@@ -376,7 +458,10 @@ export async function prepareMultiGameLaunch({
       attemptedLocalKeys.push(key);
       localStorage.setItem(key, value);
     }
-    sessionStorage.setItem(MULTI_GAME_ACTIVE_LAUNCH_KEY, serializedLaunch);
+    sessionStorage.setItem(activeLaunchKey, serializedLaunch);
+    for (const [scopeId, bytes] of rememberedBins) {
+      rememberedLaunchBins.set(scopeId, bytes);
+    }
   } catch (error) {
     for (const key of attemptedLocalKeys.reverse()) {
       try {
@@ -386,11 +471,69 @@ export async function prepareMultiGameLaunch({
       }
     }
     try {
-      sessionStorage.removeItem(MULTI_GAME_ACTIVE_LAUNCH_KEY);
+      sessionStorage.removeItem(activeLaunchKey);
     } catch {
       // Preserve the original storage error for the caller.
     }
     throw error;
   }
   return { launch, failures };
+}
+
+export function prepareMultiGameLaunch(options) {
+  return prepareGameLaunch({
+    ...options,
+    activeLaunchKey: MULTI_GAME_ACTIVE_LAUNCH_KEY,
+  });
+}
+
+export function prepareSingleGameLaunch({ token, ...options }) {
+  return prepareGameLaunch({
+    ...options,
+    tokens: [token],
+    activeLaunchKey: SINGLE_GAME_ACTIVE_LAUNCH_KEY,
+  });
+}
+
+export function clearGameSessionBinData({ scopeId, localStorage }) {
+  const prefix = `multi-game:${scopeId}:`;
+  for (const key of storageKeys(localStorage)) {
+    if (key.startsWith(`${prefix}bin_data_`)) localStorage.removeItem(key);
+  }
+}
+
+export function reseedGameSessionBin({ scopeId, tokenId, localStorage }) {
+  const bytes = rememberedLaunchBins.get(scopeId);
+  if (!bytes?.byteLength) return false;
+  const hex = Array.from(bytes, (byte) =>
+    byte.toString(16).padStart(2, "0"),
+  ).join("");
+  localStorage.setItem(`multi-game:${scopeId}:bin_data_${tokenId}`, hex);
+  return true;
+}
+
+export function forgetGameSession(scopeId) {
+  return rememberedLaunchBins.delete(scopeId);
+}
+
+export function forgetAllGameSessions() {
+  rememberedLaunchBins.clear();
+}
+
+export function closeSingleGameSession({
+  scopeId,
+  localStorage,
+  sessionStorage,
+}) {
+  const launch = readActiveSingleGameLaunch(sessionStorage);
+  if (!launch) return null;
+  const target = launch.sessions.find((session) => session.scopeId === scopeId);
+  if (!target) return launch;
+  const prefix = `multi-game:${scopeId}:`;
+  for (const key of storageKeys(localStorage)) {
+    if (key.startsWith(prefix)) localStorage.removeItem(key);
+  }
+  rememberedLaunchBins.delete(scopeId);
+  sessionStorage.removeItem(SINGLE_GAME_ACTIVE_LAUNCH_KEY);
+  return { ...launch, sessions: [] };
 }

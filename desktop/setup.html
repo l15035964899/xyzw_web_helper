@@ -1,0 +1,327 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:;"
+    />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>连接 XYZW NAS</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family:
+          -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+          "Microsoft YaHei", sans-serif;
+        background: #10151f;
+        color: #f5f7fb;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        min-height: 100vh;
+        margin: 0;
+        display: grid;
+        place-items: center;
+        padding: 36px;
+        background:
+          radial-gradient(circle at 15% 10%, #1e3a5f 0, transparent 42%),
+          radial-gradient(circle at 90% 80%, #2d245c 0, transparent 40%),
+          #10151f;
+      }
+
+      main {
+        width: min(620px, 100%);
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        border-radius: 20px;
+        padding: 30px;
+        background: rgba(24, 31, 45, 0.94);
+        box-shadow: 0 24px 70px rgba(0, 0, 0, 0.4);
+      }
+
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        margin-bottom: 18px;
+      }
+
+      .mark {
+        width: 42px;
+        height: 42px;
+        border-radius: 12px;
+        display: grid;
+        place-items: center;
+        background: linear-gradient(135deg, #ffc93c, #ff8a00);
+        color: #1c2230;
+        font-size: 22px;
+        font-weight: 800;
+      }
+
+      h1 {
+        margin: 0;
+        font-size: 24px;
+      }
+
+      .subtitle {
+        margin: 0 0 24px;
+        color: #aeb8c8;
+        line-height: 1.65;
+      }
+
+      label {
+        display: block;
+        margin: 18px 0 8px;
+        color: #dce4ef;
+        font-size: 14px;
+        font-weight: 600;
+      }
+
+      input {
+        width: 100%;
+        border: 1px solid #3b465a;
+        border-radius: 10px;
+        background: #111824;
+        color: #f5f7fb;
+        padding: 12px 13px;
+        font: inherit;
+        outline: none;
+      }
+
+      input:focus {
+        border-color: #f2b632;
+        box-shadow: 0 0 0 3px rgba(242, 182, 50, 0.14);
+      }
+
+      .hint {
+        margin-top: 7px;
+        color: #8793a5;
+        font-size: 12px;
+        line-height: 1.55;
+      }
+
+      .actions {
+        display: flex;
+        gap: 10px;
+        margin-top: 24px;
+      }
+
+      button {
+        border: 0;
+        border-radius: 10px;
+        padding: 12px 18px;
+        font: inherit;
+        font-weight: 650;
+        cursor: pointer;
+      }
+
+      button:disabled {
+        cursor: wait;
+        opacity: 0.6;
+      }
+
+      .secondary {
+        background: #2a3445;
+        color: #e9eef6;
+      }
+
+      .primary {
+        flex: 1;
+        background: linear-gradient(135deg, #ffc93c, #ff9f1c);
+        color: #1b2230;
+      }
+
+      .status {
+        min-height: 42px;
+        margin-top: 16px;
+        border-radius: 9px;
+        padding: 11px 13px;
+        font-size: 13px;
+        line-height: 1.5;
+        background: #151d2a;
+        color: #aeb8c8;
+      }
+
+      .status.success {
+        background: rgba(31, 160, 98, 0.14);
+        color: #6fe0a6;
+      }
+
+      .status.error {
+        background: rgba(220, 67, 67, 0.14);
+        color: #ff9b9b;
+      }
+
+      .footer {
+        margin-top: 18px;
+        color: #788496;
+        font-size: 12px;
+        line-height: 1.6;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="brand">
+        <div class="mark">X</div>
+        <div>
+          <h1>连接 XYZW NAS</h1>
+        </div>
+      </div>
+      <p class="subtitle">
+        桌面客户端只负责界面和本地安全转发。账号、BIN、定时任务与日志继续保存在
+        NAS，关闭窗口不会影响定时任务。
+      </p>
+      <form id="form">
+        <label for="baseUrl">NAS 地址</label>
+        <input
+          id="baseUrl"
+          name="baseUrl"
+          type="url"
+          required
+          placeholder="http://192.168.0.222:3002"
+          autocomplete="off"
+        />
+        <div class="hint">
+          局域网可使用 HTTP；通过公网访问时建议使用有效的 HTTPS 地址。
+        </div>
+
+        <label for="apiKey">NAS API Key</label>
+        <input
+          id="apiKey"
+          name="apiKey"
+          type="password"
+          placeholder="首次设置时必填"
+          autocomplete="off"
+        />
+        <div id="keyHint" class="hint">
+          API Key 会使用系统钥匙串加密保存，不会写入网页存储。
+        </div>
+
+        <div id="status" class="status" aria-live="polite">
+          填写信息后先测试连接。
+        </div>
+        <div class="actions">
+          <button id="back" class="secondary" type="button" hidden>
+            返回主界面
+          </button>
+          <button id="test" class="secondary" type="button">测试连接</button>
+          <button id="save" class="primary" type="submit">保存并进入</button>
+        </div>
+      </form>
+      <div class="footer">
+        当前模式：NAS 连接版。定时任务在 NAS 上持续运行。
+      </div>
+    </main>
+    <script>
+      const form = document.getElementById("form");
+      const baseUrl = document.getElementById("baseUrl");
+      const apiKey = document.getElementById("apiKey");
+      const keyHint = document.getElementById("keyHint");
+      const statusBox = document.getElementById("status");
+      const testButton = document.getElementById("test");
+      const saveButton = document.getElementById("save");
+      const backButton = document.getElementById("back");
+      let current = null;
+      let tested = false;
+      let busy = false;
+
+      function setStatus(message, type = "") {
+        statusBox.textContent = message;
+        statusBox.className = `status${type ? ` ${type}` : ""}`;
+      }
+
+      function setBusy(value) {
+        busy = value;
+        testButton.disabled = value;
+        saveButton.disabled = value;
+        form.querySelectorAll("input").forEach((input) => {
+          input.disabled = value;
+        });
+      }
+
+      function payload() {
+        return {
+          baseUrl: baseUrl.value.trim(),
+          apiKey: apiKey.value.trim(),
+        };
+      }
+
+      async function init() {
+        if (!window.xyzwDesktop) {
+          setStatus("桌面安全桥接未加载，请重新启动客户端。", "error");
+          setBusy(true);
+          return;
+        }
+        current = await window.xyzwDesktop.getConfig();
+        baseUrl.value = current.baseUrl || "http://192.168.0.222:3002";
+        if (current.hasApiKey) {
+          apiKey.placeholder = "已安全保存，留空则保持不变";
+          keyHint.textContent =
+            "API Key 已保存在系统安全存储中；留空可继续使用原值。";
+        }
+        backButton.hidden = !current.configured;
+      }
+
+      async function testConnection() {
+        if (busy) return;
+        setBusy(true);
+        tested = false;
+        setStatus("正在连接 NAS；首次使用时如出现“本地网络”提示，请选择允许…");
+        try {
+          const result = await window.xyzwDesktop.testConfig(payload());
+          if (!result.ok) throw new Error(result.error || "连接失败");
+          tested = true;
+          setStatus(
+            `连接成功，NAS 中读取到 ${result.count ?? "未知"} 个账号。`,
+            "success",
+          );
+        } catch (error) {
+          setStatus(error.message || "连接失败", "error");
+        } finally {
+          setBusy(false);
+        }
+      }
+
+      async function save(event) {
+        event.preventDefault();
+        if (busy) return;
+        setBusy(true);
+        setStatus("正在验证并保存 NAS 连接…");
+        try {
+          const result = await window.xyzwDesktop.saveConfig(payload());
+          if (!result.ok) throw new Error(result.error || "保存失败");
+          setStatus(
+            `已连接 ${new URL(result.config.baseUrl).host}，正在打开主界面…`,
+            "success",
+          );
+        } catch (error) {
+          setStatus(error.message || "保存失败", "error");
+          setBusy(false);
+        }
+      }
+
+      baseUrl.addEventListener("input", () => {
+        tested = false;
+      });
+      apiKey.addEventListener("input", () => {
+        tested = false;
+      });
+      testButton.addEventListener("click", testConnection);
+      form.addEventListener("submit", save);
+      backButton.addEventListener("click", () => {
+        window.xyzwDesktop.openApp().then((result) => {
+          if (!result.ok) setStatus(result.error || "无法打开主界面", "error");
+        });
+      });
+      init().catch((error) => {
+        setStatus(error.message || "读取桌面配置失败", "error");
+        setBusy(true);
+      });
+    </script>
+  </body>
+</html>

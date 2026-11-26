@@ -3,6 +3,7 @@
 .wrangler
 coverage
 deploy
+desktop
 dist
 node_modules
 render-backend/node_modules

@@ -535,4 +535,92 @@ test("resolveMultiGameFrameMessage accepts only the matching same-origin iframe"
   );
 });
 
+test("resolveGameBinBuffer prefers the desktop NAS bridge and falls back locally", async () => {
+  const remote = Uint8Array.from([112, 108, 9, 8, 7]).buffer;
+  const local = Uint8Array.from([112, 108, 1, 2]).buffer;
+  assert.deepEqual(
+    await launcher.resolveGameBinBuffer(
+      { id: "account-a" },
+      {
+        getArrayBuffer: async () => local,
+        desktopBridge: {
+          getGameBin: async (tokenId) => {
+            assert.equal(tokenId, "account-a");
+            return { ok: true, data: remote };
+          },
+        },
+      },
+    ),
+    remote,
+  );
+
+  assert.deepEqual(
+    await launcher.resolveGameBinBuffer(
+      { id: "account-a" },
+      {
+        getArrayBuffer: async () => local,
+        desktopBridge: {
+          getGameBin: async () => ({
+            ok: false,
+            error: "NAS 未保存该账号的 BIN",
+          }),
+        },
+      },
+    ),
+    local,
+  );
+});
+
+test("single-game launch is scoped and its BIN can be cleaned and reseeded", async () => {
+  const local = new MemoryStorage();
+  const session = new MemoryStorage();
+  const uuids = [
+    "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+    "44444444-4444-4444-4444-444444444444",
+  ];
+  const bytes = Uint8Array.from([112, 108, 5, 6, 7]);
+  const result = await launcher.prepareSingleGameLaunch({
+    token: { id: "single-a", name: "单账号" },
+    getArrayBuffer: async () => bytes.buffer,
+    localStorage: local,
+    sessionStorage: session,
+    randomUUID: () => uuids.shift(),
+    now: () => 1,
+  });
+  const scopeId = result.launch.sessions[0].scopeId;
+  const binKey = `multi-game:${scopeId}:bin_data_single-a`;
+  assert.equal(local.getItem(binKey), "706c050607");
+  assert.deepEqual(
+    JSON.parse(session.getItem("single-game_active_launch_v1")),
+    result.launch,
+  );
+
+  launcher.clearGameSessionBinData({
+    scopeId,
+    localStorage: local,
+  });
+  assert.equal(local.getItem(binKey), null);
+  assert.equal(
+    local.getItem(`multi-game:${scopeId}:current_bin_id`),
+    "single-a",
+  );
+  assert.equal(
+    launcher.reseedGameSessionBin({
+      scopeId,
+      tokenId: "single-a",
+      localStorage: local,
+    }),
+    true,
+  );
+  assert.equal(local.getItem(binKey), "706c050607");
+
+  launcher.closeSingleGameSession({
+    scopeId,
+    localStorage: local,
+    sessionStorage: session,
+  });
+  assert.equal(local.getItem(binKey), null);
+  assert.equal(session.getItem("single-game_active_launch_v1"), null);
+});
+
 export { MemoryStorage };

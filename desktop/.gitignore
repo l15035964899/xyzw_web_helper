@@ -1,0 +1,6 @@
+.work/
+web/
+node_modules/
+release/
+.build.lock
+proxies.cjs
