@@ -10,6 +10,32 @@ import {
   toStorePurchaseItemList,
 } from "./blackMarketConfig";
 
+const TEN_DAY_FREE_GIFT_ID = 17;
+const RECRUIT_WEEK_STORE_GOODS = {
+  activityId: 6,
+  goodsIndex: 0,
+  buyNum: 1,
+};
+const RECRUIT_WEEK_ACTIVITY_TYPE = 4;
+
+function getRecruitWeekStoreState(response) {
+  const activityRoot = response?.activity?.activity
+    ? response.activity
+    : response?.activity || response;
+  const activeActivity = (activityRoot?.activity || []).find(
+    (activity) => Number(activity?.id) === RECRUIT_WEEK_STORE_GOODS.activityId,
+  );
+  const complete =
+    Number(
+      activityRoot?.myStoreInfo?.[RECRUIT_WEEK_STORE_GOODS.activityId]
+        ?.complete?.[RECRUIT_WEEK_STORE_GOODS.goodsIndex] || 0,
+    ) > 0;
+  return {
+    active: Number(activeActivity?.type) === RECRUIT_WEEK_ACTIVITY_TYPE,
+    complete,
+  };
+}
+
 /**
  * 创建商店类任务执行器
  * @param {object} deps - 依赖项
@@ -549,11 +575,214 @@ export function createTasksStore(deps) {
     shouldStop.value = false;
   };
 
+  /**
+   * 领取主页“十殿礼包”的第一个免费礼包
+   */
+  const activity_claimrolluppack = async () => {
+    if (selectedTokens.value.length === 0) return;
+
+    isRunning.value = true;
+    shouldStop.value = false;
+
+    selectedTokens.value.forEach((id) => {
+      tokenStatus.value[id] = "waiting";
+    });
+
+    const taskPromises = selectedTokens.value.map(async (tokenId) => {
+      if (shouldStop.value) return;
+
+      tokenStatus.value[tokenId] = "running";
+      const token = tokens.value.find((t) => t.id === tokenId);
+
+      try {
+        addLog({
+          time: new Date().toLocaleTimeString(),
+          message: `=== 开始领取十殿免费礼包: ${token.name} ===`,
+          type: "info",
+        });
+
+        await ensureConnection(tokenId);
+
+        addLog({
+          time: new Date().toLocaleTimeString(),
+          message: `${token.name} 发送十殿免费礼包领取请求...`,
+          type: "info",
+        });
+
+        await tokenStore.sendMessageWithPromise(
+          tokenId,
+          "activity_claimrolluppack",
+          { id: TEN_DAY_FREE_GIFT_ID },
+          5000,
+        );
+
+        await sleep(delayConfig.action);
+
+        addLog({
+          time: new Date().toLocaleTimeString(),
+          message: `${token.name} 十殿免费礼包领取完成`,
+          type: "success",
+        });
+        tokenStatus.value[tokenId] = "completed";
+      } catch (error) {
+        const errorText = String(error?.message || error);
+        const alreadyClaimed = /12000116|1000020|700020|3500020/.test(
+          errorText,
+        );
+        const possibleAlreadyClaimed = /200020/.test(errorText);
+        addLog({
+          time: new Date().toLocaleTimeString(),
+          message: possibleAlreadyClaimed
+            ? `${token.name} 十殿礼包可能已领取（服务器返回 200020），未重试`
+            : alreadyClaimed
+              ? `${token.name} 十殿免费礼包今日已领取`
+              : `${token.name} 十殿礼包领取失败: ${error.message || error}`,
+          type:
+            possibleAlreadyClaimed || alreadyClaimed
+              ? alreadyClaimed
+                ? "info"
+                : "warning"
+              : "error",
+        });
+        tokenStatus.value[tokenId] =
+          possibleAlreadyClaimed || alreadyClaimed ? "completed" : "failed";
+      } finally {
+        tokenStore.closeWebSocketConnection(tokenId);
+        releaseConnectionSlot();
+        addLog({
+          time: new Date().toLocaleTimeString(),
+          message: `${token.name} 连接已关闭 (队列: ${connectionQueue.active}/${batchSettings.maxActive})`,
+          type: "info",
+        });
+      }
+    });
+
+    await Promise.all(taskPromises);
+
+    currentRunningTokenId.value = null;
+    isRunning.value = false;
+    shouldStop.value = false;
+  };
+
+  /**
+   * 领取招募周“周活动 -> 限时商店”的第一个免费项。
+   * 招募、宝箱、江湖黑市三个周常轮换，后续类型需重新抓包确认参数。
+   */
+  const activity_buystoregoods = async () => {
+    if (selectedTokens.value.length === 0) return;
+
+    isRunning.value = true;
+    shouldStop.value = false;
+
+    selectedTokens.value.forEach((id) => {
+      tokenStatus.value[id] = "waiting";
+    });
+
+    const taskPromises = selectedTokens.value.map(async (tokenId) => {
+      if (shouldStop.value) return;
+
+      tokenStatus.value[tokenId] = "running";
+      const token = tokens.value.find((t) => t.id === tokenId);
+
+      try {
+        addLog({
+          time: new Date().toLocaleTimeString(),
+          message: `=== 开始领取招募周限时商店奖励: ${token.name} ===`,
+          type: "info",
+        });
+
+        await ensureConnection(tokenId);
+
+        addLog({
+          time: new Date().toLocaleTimeString(),
+          message: `${token.name} 读取招募周限时商店状态...`,
+          type: "info",
+        });
+
+        const activityResponse = await tokenStore.sendMessageWithPromise(
+          tokenId,
+          "activity_get",
+          {},
+          5000,
+        );
+        const weeklyState = getRecruitWeekStoreState(activityResponse);
+        if (!weeklyState.active) {
+          addLog({
+            time: new Date().toLocaleTimeString(),
+            message: `${token.name} 当前不是招募周，跳过限时商店领取`,
+            type: "info",
+          });
+          tokenStatus.value[tokenId] = "completed";
+          return;
+        }
+        if (weeklyState.complete) {
+          addLog({
+            time: new Date().toLocaleTimeString(),
+            message: `${token.name} 招募周限时商店本周已领取`,
+            type: "info",
+          });
+          tokenStatus.value[tokenId] = "completed";
+          return;
+        }
+
+        addLog({
+          time: new Date().toLocaleTimeString(),
+          message: `${token.name} 发送招募周免费礼包领取请求...`,
+          type: "info",
+        });
+
+        await tokenStore.sendMessageWithPromise(
+          tokenId,
+          "activity_buystoregoods",
+          { ...RECRUIT_WEEK_STORE_GOODS },
+          5000,
+        );
+
+        await sleep(delayConfig.action);
+
+        addLog({
+          time: new Date().toLocaleTimeString(),
+          message: `${token.name} 招募周限时商店领取完成`,
+          type: "success",
+        });
+        tokenStatus.value[tokenId] = "completed";
+      } catch (error) {
+        const errorText = String(error?.message || error);
+        const alreadyClaimed =
+          /1100010|12000116|1000020|700020|7900023/.test(errorText);
+        addLog({
+          time: new Date().toLocaleTimeString(),
+          message: alreadyClaimed
+            ? `${token.name} 招募周限时商店本周已领取`
+            : `${token.name} 招募周限时商店领取失败: ${error.message || error}`,
+          type: alreadyClaimed ? "warning" : "error",
+        });
+        tokenStatus.value[tokenId] = alreadyClaimed ? "completed" : "failed";
+      } finally {
+        tokenStore.closeWebSocketConnection(tokenId);
+        releaseConnectionSlot();
+        addLog({
+          time: new Date().toLocaleTimeString(),
+          message: `${token.name} 连接已关闭 (队列: ${connectionQueue.active}/${batchSettings.maxActive})`,
+          type: "info",
+        });
+      }
+    });
+
+    await Promise.all(taskPromises);
+
+    currentRunningTokenId.value = null;
+    isRunning.value = false;
+    shouldStop.value = false;
+  };
+
   return {
     legion_storebuygoods,
     legionStoreBuySkinCoins,
     store_purchase,
     store_syncpurchaseconfig,
     collection_claimfreereward,
+    activity_claimrolluppack,
+    activity_buystoregoods,
   };
 }
