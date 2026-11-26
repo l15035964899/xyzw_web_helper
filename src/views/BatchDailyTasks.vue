@@ -372,6 +372,20 @@
                 </n-button>
                 <n-button
                   size="small"
+                  @click="activity_claimrolluppack"
+                  :disabled="isRunning || selectedTokens.length === 0"
+                >
+                  一键领取十殿礼包
+                </n-button>
+                <n-button
+                  size="small"
+                  @click="activity_buystoregoods"
+                  :disabled="isRunning || selectedTokens.length === 0"
+                >
+                  领取招募周限时商店
+                </n-button>
+                <n-button
+                  size="small"
                   @click="batchGenieSweep"
                   :disabled="isRunning || selectedTokens.length === 0"
                 >
@@ -3955,6 +3969,8 @@ const taskGroupDefinitions = [
       "store_syncpurchaseconfig",
       "store_purchase",
       "collection_claimfreereward",
+      "activity_claimrolluppack",
+      "activity_buystoregoods",
       "batchGenieSweep",
       "batchXuanwuBlessing",
     ],
@@ -6375,6 +6391,8 @@ const {
   store_syncpurchaseconfig,
   store_purchase,
   collection_claimfreereward,
+  activity_claimrolluppack,
+  activity_buystoregoods,
 } = tasksStore;
 
 const tasksLegacy = createTasksLegacy(createTaskDeps());
