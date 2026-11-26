@@ -141,3 +141,10 @@ dist
 
 # Desktop packaging documentation
 !desktop/README.md
+
+# Handoff and requirement design documents
+!HANDOFF.md
+!docs/handoff/
+!docs/handoff/*.md
+!docs/handoff/requirements/
+!docs/handoff/requirements/*.md
