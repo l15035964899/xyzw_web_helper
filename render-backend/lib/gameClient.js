@@ -102,6 +102,48 @@ const CMD_DEFAULTS = {
   fight_startpvp: {},
   fight_startdungeon: {},
   matchteam_getroleteaminfo: {},
+  matchteam_create: {
+    teamCfgId: 1,
+    setting: {
+      name: "",
+      notice: "",
+      secret: 1,
+      apply: 0,
+      applyList: [],
+      star: 0,
+    },
+    param: 0,
+    custom: {},
+    extParam: 0,
+  },
+  matchteam_join: { teamId: "" },
+  matchteam_memberprepare: { teamId: "" },
+  matchteam_getteaminfo: { teamId: "" },
+  matchteam_dismiss: { teamId: "" },
+  matchteam_getrandteamlist: { teamCfgId: 1, param: 0, custom: {} },
+  matchteam_openteam: { teamId: "" },
+  role_gettargetteam: { targetId: 0, teamType: 3, cCMonsterId: 0 },
+  team_setteam: {
+    teamType: 3,
+    battleTeam: {},
+    lordWeaponId: 0,
+    petUId: "",
+    cCMonsterId: 0,
+  },
+  hero_calcpowerbyteam: {
+    battleTeam: {},
+    lordWeaponId: 0,
+    petUId: "",
+  },
+  nightmare_getroleinfo: { roleId: 0 },
+  nightmare_getroominfo: { roomId: "" },
+  nightmare_setfighter: { roomId: "", roleId: 0 },
+  nightmare_fight: { roomId: "", roleId: 0 },
+  nightmare_leadercomplete: { roomId: "" },
+  nightmare_restore: { roomId: "", roleId: 0 },
+  nightmare_dismiss: { roomId: "" },
+  nightmare_getcharm: { serverId: 0 },
+  nightmare_buycharm: { charmId: 1, buyNum: 1 },
   bosstower_getinfo: {},
   bosstower_startboss: {},
   bosstower_startbox: {},
@@ -195,6 +237,24 @@ const RESP_MAP = {
   fight_startbossresp: "fight_startboss",
   fight_startpvpresp: "fight_startpvp",
   matchteam_getroleteaminforesp: "matchteam_getroleteaminfo",
+  matchteam_createresp: "matchteam_create",
+  matchteam_joinresp: "matchteam_join",
+  matchteam_memberprepareresp: "matchteam_memberprepare",
+  matchteam_getteaminforesp: "matchteam_getteaminfo",
+  matchteam_dismissresp: "matchteam_dismiss",
+  matchteam_getrandteamlistresp: "matchteam_getrandteamlist",
+  matchteam_openteamresp: "matchteam_openteam",
+  role_gettargetteamresp: "role_gettargetteam",
+  hero_calcpowerbyteamresp: "hero_calcpowerbyteam",
+  nightmare_getroleinforesp: "nightmare_getroleinfo",
+  nightmare_getroominforesp: "nightmare_getroominfo",
+  nightmare_setfighterresp: "nightmare_setfighter",
+  nightmare_fightresp: "nightmare_fight",
+  nightmare_leadercompleteresp: "nightmare_leadercomplete",
+  nightmare_restoreresp: "nightmare_restore",
+  nightmare_dismissresp: "nightmare_dismiss",
+  nightmare_getcharmresp: "nightmare_getcharm",
+  nightmare_buycharmresp: "nightmare_buycharm",
   bosstower_getinforesp: "bosstower_getinfo",
   bosstower_startbossresp: "bosstower_startboss",
   bosstower_startboxresp: "bosstower_startbox",
@@ -295,6 +355,7 @@ class GameClient {
     this.serverTime = undefined;
     this.battleVersion = null;
     this.battleVersionPromise = null;
+    this.events = new Map();
     this._log = (...args) =>
       console.log(
         `[${tokenData.name || "?"}]`,
@@ -305,6 +366,46 @@ class GameClient {
 
   log(...args) {
     this._log(...args);
+  }
+
+  on(eventName, listener) {
+    const key = String(eventName).toLowerCase();
+    const listeners = this.events.get(key) || [];
+    listeners.push(listener);
+    this.events.set(key, listeners);
+    return () => this.off(eventName, listener);
+  }
+
+  off(eventName, listener) {
+    const key = String(eventName).toLowerCase();
+    const listeners = this.events.get(key);
+    if (!listeners) return;
+    const next = listeners.filter((entry) => entry !== listener);
+    if (next.length > 0) this.events.set(key, next);
+    else this.events.delete(key);
+  }
+
+  _emitProtocolEvent(eventName, data) {
+    if (!eventName) return;
+    for (const listener of this.events.get(String(eventName).toLowerCase()) ||
+      []) {
+      try {
+        listener(data);
+      } catch (error) {
+        this.log("协议事件处理失败:", error.message);
+      }
+    }
+  }
+
+  _protocolError(msg, rawData) {
+    const error = new Error(
+      `[${msg.code}] ${errorCodeMap[msg.code] || msg.hint || msg.error || "未知错误"}`,
+    );
+    error.code = msg.code;
+    error.hint = msg.hint || null;
+    error.serverError = msg.error || null;
+    error.rawBody = rawData || null;
+    return error;
   }
 
   connect(timeoutMs = 15000) {
@@ -559,19 +660,17 @@ class GameClient {
 
     const respKey = msg.resp !== undefined ? msg.resp : msg.cmd;
     const respCmdKey = respKey?.toLowerCase?.() || respKey;
+    const rawData = protoMsg.rawData || msg;
+    this._emitProtocolEvent(msg.cmd, rawData);
 
     if (msg.resp !== undefined && this.promises[msg.resp]) {
       const p = this.promises[msg.resp];
       clearTimeout(p.timer);
       delete this.promises[msg.resp];
       if (msg.code === 0 || msg.code === undefined) {
-        p.resolve(protoMsg.rawData || msg);
+        p.resolve(rawData);
       } else {
-        p.reject(
-          new Error(
-            `[${msg.code}] ${errorCodeMap[msg.code] || msg.hint || "未知错误"}`,
-          ),
-        );
+        p.reject(this._protocolError(msg, rawData));
       }
       return;
     }
@@ -585,13 +684,9 @@ class GameClient {
         clearTimeout(p.timer);
         delete this.promises[id];
         if (msg.code === 0 || msg.code === undefined) {
-          p.resolve(protoMsg.rawData || msg);
+          p.resolve(rawData);
         } else {
-          p.reject(
-            new Error(
-              `[${msg.code}] ${errorCodeMap[msg.code] || msg.hint || "未知错误"}`,
-            ),
-          );
+          p.reject(this._protocolError(msg, rawData));
         }
         break;
       }
