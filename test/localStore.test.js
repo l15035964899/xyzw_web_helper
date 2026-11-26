@@ -109,11 +109,27 @@ test("local store persists tokens, tasks and task logs", async (t) => {
   assert.equal(settings.receiverId, "99");
   assert.equal(await store.hasBatchSettings(), true);
 
+  const runState = await store.saveNightmareRunState({
+    taskId: task.id,
+    teamId: "team-a",
+    phase: "paused-cross-week",
+    roomId: "room-a",
+  });
+  assert.equal(runState.phase, "paused-cross-week");
+  assert.equal(
+    (await store.getNightmareRunState(task.id)).roomId,
+    "room-a",
+  );
+
   const reloaded = createLocalStore({ dataDir: directory });
   await reloaded.init();
   assert.equal((await reloaded.listTokens())[0].id, token.id);
   assert.equal((await reloaded.listTasks())[0].id, task.id);
   assert.equal((await reloaded.getBatchSettings()).boxCount, 25);
+  assert.equal(
+    (await reloaded.getNightmareRunState(task.id)).phase,
+    "paused-cross-week",
+  );
 });
 
 test("local store keeps the newest token session and private BIN credentials", async (t) => {

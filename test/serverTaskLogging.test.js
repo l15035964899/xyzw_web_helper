@@ -37,3 +37,38 @@ test("failed scheduled tasks use the delayed single-retry scheduler", () => {
   assert.match(taskRetry, /source:\s*"nas-retry",\s*retryAttempt:\s*1/);
   assert.match(server, /taskRetryScheduled/);
 });
+
+test("manual nightmare team operations are persisted with a run id", () => {
+  assert.match(server, /writeManualNightmareLog/);
+  assert.match(server, /开始手动创建\/准备十殿队伍[\s\S]*开始手动解散十殿队伍/);
+  assert.match(server, /source:\s*"nas-manual"/);
+});
+
+test("token refresh runs only after the task has acquired its account locks", () => {
+  const scheduledLock = server.indexOf(
+    "let taskLease = await tokenLockQueue.acquireAll",
+  );
+  const scheduledRefresh = server.indexOf(
+    "const refreshSummary = await tokenRefreshManager.run",
+  );
+  const prepareStart = server.indexOf(
+    "async function prepareNightmareTeamManually",
+  );
+  const disbandStart = server.indexOf(
+    "async function disbandNightmareTeamManually",
+  );
+  const prepareLease = server.indexOf("manual-prepare:", prepareStart);
+  const prepareRefresh = server.indexOf(
+    "await tokenRefreshManager.run",
+    prepareStart,
+  );
+  const disbandLease = server.indexOf("manual-disband:", disbandStart);
+  const disbandRefresh = server.indexOf(
+    "await tokenRefreshManager.run",
+    disbandStart,
+  );
+
+  assert.ok(scheduledLock >= 0 && scheduledLock < scheduledRefresh);
+  assert.ok(prepareLease >= 0 && prepareLease < prepareRefresh);
+  assert.ok(disbandLease >= 0 && disbandLease < disbandRefresh);
+});
