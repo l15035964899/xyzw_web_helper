@@ -1,10 +1,10 @@
 # XYZW NAS 自动化整体交接方案
 
-> 更新时间：2026-11-26 CST
+> 更新时间：2026-11-27 CST
 > 适用对象：第一次接手本项目的开发者或新会话
 > 当前分支：`main`
-> 最近发布代码：`8e8b6d6`
-> 最近部署镜像：`ghcr.io/l15035964899/xyzw-nas-all:8e8b6d6-nightmare32`
+> 最近发布代码：`79e5228`
+> 最近部署镜像：`ghcr.io/l15035964899/xyzw-nas-all:b3d616f-weekly-gift-20261127-r1`
 > 当前 Fork：`git@github.com:l15035964899/xyzw_web_helper.git`
 
 ## 0. 文档定位
@@ -22,19 +22,19 @@
 
 ## 1. 当前状态快照
 
-| 项目 | 2026-11-26 状态 |
+| 项目 | 2026-11-27 状态 |
 | --- | --- |
 | NAS | `192.168.0.222:3002` |
 | 容器 | `xyzw-nas-all`，`running / healthy` |
-| 镜像 | `ghcr.io/l15035964899/xyzw-nas-all:8e8b6d6-nightmare32` |
+| 镜像 | `ghcr.io/l15035964899/xyzw-nas-all:b3d616f-nightmare-sequence-20261127-r3` |
 | 存储 | `STORE_MODE=local` |
-| 健康接口 | `status=ok`、`activeCrons=11` |
+| 健康接口 | `status=ok`、`activeCrons=12` |
 | NAS 账号 | 12 个，全部启用 |
 | 角色身份 | 12/12 已验证，0 个身份错误 |
-| NAS 任务 | 14 个，其中 11 个启用 |
+| NAS 任务 | 以 `/api/tasks` 实时数据为准；健康接口 `activeCrons=12` |
 | 十殿任务 | 当前没有运行中的队伍 |
 | 抢符任务 | 每日 `59 11 * * *`，3 个账号，任务内等待 12:00 |
-| Web/服务端测试 | 280 项通过 |
+| Web/服务端测试 | 310 项通过 |
 | 桌面端测试 | 17 项通过 |
 | 桌面端版本 | `2.1.3` |
 
@@ -56,7 +56,9 @@ git@github.com:l15035964899/xyzw_web_helper.git
 - 长期只维护 `main`，不创建普通功能分支，不要求 PR。
 - 以后直接提交到本地 `main`，通过 `git push fork main` 更新远端。
 - 不推送到 `origin/main`。
-- 没有用户明确的“提交”或“推送”指令时，只修改和验证。
+- 没有用户明确的“提交”或“推送”指令时，不提交、不推送；仅修改、验证并按默认规则部署。
+- 功能代码修改并完成相关验证后，默认继续构建、导入并替换 NAS 容器，不需要再次等待“部署”确认。
+- 自动部署授权不包含 `git commit` 或 `git push`；提交和推送仍只在用户明确要求时执行。
 - Commit 使用中文标题和说明。
 - 尽量按功能拆分 commit；共享文件可合理使用 hunk 级拆分。
 - 不使用无信息的 `git add .`。
@@ -65,7 +67,7 @@ git@github.com:l15035964899/xyzw_web_helper.git
 当前远端状态：
 
 ```text
-fork/main = 0de6c60
+本次推送完成后，fork/main 与本地 main 保持一致
 origin/main = cf45acf
 ```
 
@@ -73,13 +75,14 @@ origin/main = cf45acf
 
 | 功能 | 文档 | 当前状态 |
 | --- | --- | --- |
-| 自动十殿 | [auto-nightmare.md](requirements/auto-nightmare.md) | 已实现并真实通关 |
+| 自动十殿 | [auto-nightmare.md](requirements/auto-nightmare.md) | 已实现共享主力序列并真实通关单队 |
 | 周常礼包与日志 | [weekly-gifts-and-logs.md](requirements/weekly-gifts-and-logs.md) | 招募周、宝箱周完成，江湖黑市周待抓包 |
 | NAS 调度与任务运行 | [nas-batch-runtime.md](requirements/nas-batch-runtime.md) | 已实现 |
 | 角色身份与 Token | [role-identity-and-token.md](requirements/role-identity-and-token.md) | 已实现并在线验证 |
 | 桌面端与 BIN | [desktop-client-and-bin.md](requirements/desktop-client-and-bin.md) | 已实现 |
 | 日常任务可靠性 | [daily-task-reliability.md](requirements/daily-task-reliability.md) | 已实现主要修复 |
-| 后续路线 | [future-roadmap.md](requirements/future-roadmap.md) | 未实现需求集中记录 |
+| NAS 原生自动推图 | [nas-auto-pushing.md](requirements/nas-auto-pushing.md) | 设计完成，尚未实现 |
+| 后续路线 | [future-roadmap.md](requirements/future-roadmap.md) | 部分已实现，其余需求集中记录 |
 
 需求目录另有 [索引](requirements/README.md)。
 
@@ -202,6 +205,8 @@ GET /api/nightmare/teams/:id/status?refresh=1
 
 ### 修改后
 
+功能代码完成以下验证后，默认继续执行镜像构建和 NAS 替换流程，不再单独等待部署指令。
+
 ```bash
 node --test test/*.test.js
 npm test --prefix desktop
@@ -297,14 +302,15 @@ GET /api/tasks/runtime
 
 ## 11. 已知风险
 
-1. 三套十殿未来可能共享一个主力，目前尚不允许跨队重复账号。
+1. 三套十殿已允许跨队共享主力，但同一队伍内仍禁止重复账号。
 2. `nightmare-runs.json` 已持久化跨周状态，但运行中队列和缓存仍需通过 API 核实。
-3. 同一账号只能一个会话在线，共享主力后必须串行执行。
+3. 同一账号只能一个会话在线；跨周队伍按成员互斥并行，其余队伍串行执行。
 4. `nightmareRunner.js` 较大，新增复杂逻辑前先补测试。
 5. NAS 镜像是本地导入，不一定已上传 GHCR。
 6. 游戏活动规则和错误码可能变化，以实机返回为准。
 7. 周常限时商店只有招募周完成，宝箱周和黑市周仍待补。
 8. Fork 上仍存在历史分支 `codex/v3-refactor`，本次未删除。
+9. 共享主力序列已完成自动测试和单队真机验证，多队跨周仍需实机演练。
 
 ## 12. 最终检查清单
 
@@ -315,6 +321,7 @@ GET /api/tasks/runtime
 [ ] 没有触发未授权的真实游戏操作
 [ ] /health、任务和账号状态正常
 [ ] 目标测试、全量测试、桌面测试、构建通过
+[ ] 功能代码验证后已直接部署并核对 NAS 健康状态
 [ ] 提交信息为中文并按功能拆分
 [ ] 推送目标是 fork/main
 [ ] 没有输出敏感值
