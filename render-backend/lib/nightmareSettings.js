@@ -141,6 +141,63 @@ function normalizeCharmTargets(value) {
   );
 }
 
+function teamMemberIds(team) {
+  return new Set((team?.members || []).map((entry) => String(entry.tokenId)));
+}
+
+function findMemberOverlap(left, right) {
+  const leftIds = teamMemberIds(left);
+  return (right?.members || [])
+    .map((entry) => String(entry.tokenId))
+    .filter((tokenId) => tokenId && leftIds.has(tokenId));
+}
+
+export function buildNightmareSequencePlan(teams = []) {
+  const activeCrossWeekTeams = [];
+  let hasEnabledTeam = false;
+  const normalizedTeams = [];
+  const plan = teams.map((team, index) => {
+    const forcedAnchor = team.enabled && !hasEnabledTeam;
+    if (forcedAnchor) {
+      hasEnabledTeam = true;
+    }
+    const conflictTeamIds = forcedAnchor
+      ? []
+      : activeCrossWeekTeams
+          .filter(
+            (activeTeam) => findMemberOverlap(activeTeam, team).length > 0,
+          )
+          .map((activeTeam) => activeTeam.id);
+    const crossWeekLocked = conflictTeamIds.length > 0;
+    const crossWeek = forcedAnchor
+      ? true
+      : crossWeekLocked
+        ? false
+        : Boolean(team.crossWeek);
+    const normalizedTeam = { ...team, crossWeek };
+    normalizedTeams.push(normalizedTeam);
+    if (team.enabled && crossWeek) {
+      activeCrossWeekTeams.push(normalizedTeam);
+    }
+    return {
+      index,
+      teamId: team.id,
+      teamName: team.name,
+      enabled: team.enabled,
+      crossWeek,
+      crossWeekLocked: forcedAnchor || crossWeekLocked,
+      conflictTeamIds,
+    };
+  });
+
+  return { teams: normalizedTeams, plan };
+}
+
+export function getNightmareSequencePlan(settings = {}) {
+  const normalized = normalizeNightmareSettings(settings);
+  return buildNightmareSequencePlan(normalized.teams).plan;
+}
+
 export function normalizeNightmareCharmSettings(input = {}) {
   return {
     priority: normalizeCharmPriority(input.priority),
@@ -195,9 +252,10 @@ export function normalizeNightmareSettings(input = {}) {
   const teams = Array.isArray(input?.teams)
     ? input.teams.map((team, index) => normalizeTeam(team, index)).slice(0, 3)
     : [];
+  const sequence = buildNightmareSequencePlan(teams);
   return {
     version: 1,
-    teams,
+    teams: sequence.teams,
     charm: normalizeNightmareCharmSettings(input?.charm),
   };
 }
@@ -294,19 +352,12 @@ export function validateNightmareTeam(team) {
 export function validateNightmareSettings(settings) {
   const normalized = normalizeNightmareSettings(settings);
   const errors = [];
-  const seenAccounts = new Set();
   for (const team of normalized.teams) {
     const result = validateNightmareTeam(team);
     if (!result.valid) {
       errors.push(
         ...result.errors.map((error) => `${team.name || team.id}: ${error}`),
       );
-    }
-    for (const accountId of getNightmareTeamAccountIds(team)) {
-      if (seenAccounts.has(accountId)) {
-        errors.push(`账号 ${accountId} 同时出现在多套十殿队伍中`);
-      }
-      seenAccounts.add(accountId);
     }
   }
   return { valid: errors.length === 0, errors, settings: normalized };

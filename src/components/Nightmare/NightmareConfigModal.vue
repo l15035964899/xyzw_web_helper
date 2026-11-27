@@ -98,27 +98,6 @@
             </n-alert>
           </n-card>
 
-          <n-grid :cols="2" :x-gap="12" :y-gap="12" responsive="screen">
-            <n-grid-item>
-              <div class="field-label">队长</div>
-              <n-select
-                v-model:value="team.leaderTokenId"
-                :options="memberOptions(team)"
-                placeholder="选择队长"
-                clearable
-              />
-            </n-grid-item>
-            <n-grid-item>
-              <div class="field-label">主力（唯一使用恢复）</div>
-              <n-select
-                v-model:value="team.mainTokenId"
-                :options="memberOptions(team)"
-                placeholder="选择主力"
-                clearable
-              />
-            </n-grid-item>
-          </n-grid>
-
           <div>
             <div class="section-title">队伍成员与阵容</div>
             <n-table :bordered="false" size="small">
@@ -175,6 +154,27 @@
             </n-button>
           </div>
 
+          <n-grid :cols="2" :x-gap="12" :y-gap="12" responsive="screen">
+            <n-grid-item>
+              <div class="field-label">队长</div>
+              <n-select
+                v-model:value="team.leaderTokenId"
+                :options="memberOptions(team)"
+                placeholder="选择队长"
+                clearable
+              />
+            </n-grid-item>
+            <n-grid-item>
+              <div class="field-label">主力（唯一使用恢复）</div>
+              <n-select
+                v-model:value="team.mainTokenId"
+                :options="memberOptions(team)"
+                placeholder="选择主力"
+                clearable
+              />
+            </n-grid-item>
+          </n-grid>
+
           <div>
             <div class="section-title">第 1～8 层出战顺序</div>
             <div class="stage-grid">
@@ -211,8 +211,20 @@
                 <span>秒后发送完成指令</span>
               </n-space>
               <n-space align="center">
-                <n-switch v-model:value="team.crossWeek" />
-                <span>跨周模式：第八层前暂停，周一 0 点后继续</span>
+                <n-switch
+                  :value="teamCrossWeekPlan(team).crossWeek"
+                  :disabled="teamCrossWeekPlan(team).crossWeekLocked"
+                  @update:value="team.crossWeek = $event"
+                />
+                <span>跨周模式：仅周日 23:50 自动序列生效</span>
+                <NTag
+                  v-if="teamCrossWeekPlan(team).crossWeekLocked"
+                  size="small"
+                  type="warning"
+                  :bordered="false"
+                >
+                  {{ teamCrossWeekHint(team) }}
+                </NTag>
               </n-space>
               <n-space align="center">
                 <span>最多重试次数</span>
@@ -228,6 +240,10 @@
                   表示失败后不重试）
                 </span>
               </n-space>
+              <n-alert type="info" :bordered="false">
+                跨周仅由周日 23:50
+                的自动序列使用；此处“开始挑战”会忽略跨周，立即完整执行当前队伍。
+              </n-alert>
               <n-alert type="info" :bordered="false">
                 失败后会从第一层重新开始；符咒只准备 1～6 层各 1
                 张，重试不自动补符。
@@ -279,6 +295,7 @@ import {
 } from "@/api/nightmare";
 import { formationOptions } from "@/utils/batch/constants";
 import {
+  buildNightmareSequencePlan,
   createEmptyNightmareTeam,
   defaultNightmareSettings,
   sanitizeNightmareSettings,
@@ -315,6 +332,35 @@ const accountOptions = computed(() =>
     value: String(account.id),
   })),
 );
+
+const sequencePlan = computed(() =>
+  buildNightmareSequencePlan(draft.value.teams),
+);
+
+function teamCrossWeekPlan(team) {
+  return (
+    sequencePlan.value.find((entry) => entry.teamId === team.id) || {
+      crossWeek: Boolean(team.crossWeek),
+      crossWeekLocked: false,
+      conflictTeamIds: [],
+    }
+  );
+}
+
+function teamCrossWeekHint(team) {
+  const plan = teamCrossWeekPlan(team);
+  if (plan.conflictTeamIds.length > 0) {
+    const names = plan.conflictTeamIds
+      .map(
+        (teamId) =>
+          draft.value.teams.find((entry) => entry.id === teamId)?.name ||
+          teamId,
+      )
+      .join("、");
+    return `与跨周队伍 ${names} 成员重复`;
+  }
+  return "序列第一支实际队伍，强制跨周";
+}
 
 function memberOptions(team) {
   const selected = new Set(
@@ -356,12 +402,6 @@ function memberSelectOptions(team, memberIndex) {
       occupied.add(String(member.tokenId));
     }
   });
-  for (const otherTeam of draft.value.teams) {
-    if (otherTeam.id === team.id) continue;
-    for (const member of otherTeam.members || []) {
-      if (member.tokenId) occupied.add(String(member.tokenId));
-    }
-  }
   return accountOptions.value.filter(
     (option) =>
       !occupied.has(option.value) ||

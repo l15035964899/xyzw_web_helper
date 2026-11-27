@@ -45,8 +45,8 @@ test("manual nightmare team operations are persisted with a run id", () => {
 });
 
 test("token refresh runs only after the task has acquired its account locks", () => {
-  const scheduledLock = server.indexOf(
-    "let taskLease = await tokenLockQueue.acquireAll",
+  const scheduledLock = server.search(
+    /(?:let|const) taskLease = await tokenLockQueue\.acquireAll/,
   );
   const scheduledRefresh = server.indexOf(
     "const refreshSummary = await tokenRefreshManager.run",

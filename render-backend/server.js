@@ -36,10 +36,17 @@ import {
   getArenaFormationMap,
   NightmareRunner,
 } from "./lib/nightmareRunner.js";
+import { NightmareSequenceGate } from "./lib/nightmareSequenceGate.js";
+import {
+  createNightmareSequenceState,
+  getNightmareSequenceGroups,
+  NightmareSequenceStateStore,
+} from "./lib/nightmareSequenceState.js";
 import {
   getNightmareTeam,
   getNightmareTeamAccountIds,
   nightmareMemberMatchesRole,
+  normalizeNightmareSettings,
   validateNightmareSettings,
   validateNightmareTeam,
 } from "./lib/nightmareSettings.js";
@@ -85,6 +92,26 @@ function shanghaiDateKey(date = new Date()) {
     month: "2-digit",
     day: "2-digit",
   }).format(date);
+}
+
+function isNightmareSequenceStartWindow(date = new Date()) {
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat("en-US", {
+      timeZone: "Asia/Shanghai",
+      weekday: "short",
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+    })
+      .formatToParts(date)
+      .filter((part) => part.type !== "literal")
+      .map((part) => [part.type, part.value]),
+  );
+  return (
+    parts.weekday === "Sun" &&
+    Number(parts.hour) === 23 &&
+    Number(parts.minute) >= 50
+  );
 }
 
 const app = express();
@@ -292,6 +319,16 @@ function parseTaskKeys(task) {
   return Array.isArray(taskKeys) ? taskKeys : [];
 }
 
+function validateNightmareSequenceCron(task, cronExpression) {
+  if (
+    !parseTaskKeys(task).includes("nightmareChallenge") ||
+    String(cronExpression || "") === "50 23 * * 0"
+  ) {
+    return null;
+  }
+  return "自动十殿序列固定为每周日 23:50，请使用 Cron: 50 23 * * 0";
+}
+
 function gameClientForToken(token) {
   let tokenData;
   try {
@@ -320,6 +357,15 @@ function disconnectNightmareClients(clients) {
       // Best effort during cleanup.
     }
   }
+}
+
+function isNightmareCleanupUncertain(error) {
+  return (
+    Boolean(error?.cleanupUncertain) ||
+    /未能确认|无法确认|队伍仍在|队伍不存在/.test(
+      String(error?.message || error),
+    )
+  );
 }
 
 async function connectNightmareClients(
@@ -417,6 +463,383 @@ async function connectNightmareClients(
   }
 }
 
+function createNightmareSequenceStore(
+  savedState,
+  { taskId, teams, arenaFormations },
+) {
+  const resumable =
+    savedState?.mode === "sequence" &&
+    Array.isArray(savedState.teamSnapshots) &&
+    savedState.teamSnapshots.length > 0 &&
+    !["completed", "stopped", "stopped-after-cleanup"].includes(
+      savedState.phase,
+    );
+  const initialState = resumable
+    ? savedState
+    : createNightmareSequenceState({
+        taskId,
+        teams,
+        arenaFormations,
+      });
+  if (!Object.keys(initialState.arenaFormations || {}).length) {
+    initialState.arenaFormations = { ...arenaFormations };
+  }
+  return new NightmareSequenceStateStore({
+    taskId,
+    state: initialState,
+    saveState: async (state) => {
+      await dataStore.saveNightmareRunState?.({
+        ...state,
+        taskId,
+      });
+    },
+  });
+}
+
+async function connectNightmareTeamForSequence(
+  team,
+  { addTaskRunLog, runId, source },
+) {
+  const accountIds = new Set(
+    getNightmareTeamAccountIds(team).map((tokenId) => String(tokenId)),
+  );
+  await tokenRefreshManager.run({ tokenIds: [...accountIds] });
+  const allTokens = await dataStore.listTokens({ enabledOnly: true });
+  const teamTokens = allTokens.filter((token) =>
+    accountIds.has(String(token.id)),
+  );
+  if (teamTokens.length !== accountIds.size) {
+    const found = new Set(teamTokens.map((token) => String(token.id)));
+    const missing = [...accountIds].filter((id) => !found.has(id));
+    throw new Error(`十殿队伍账号不存在或已停用：${missing.join(", ")}`);
+  }
+  return connectNightmareClients(teamTokens, {
+    addTaskRunLog,
+    runId,
+    source,
+  });
+}
+
+async function runNightmareSequenceTeam({
+  task,
+  team,
+  stateStore,
+  arenaFormations,
+  addTaskRunLog,
+  runId,
+  source,
+}) {
+  const teamId = String(team.id);
+  const tracker = stateStore.snapshot().teams[teamId] || {};
+  let clients = new Map();
+  await stateStore.updateTeam(teamId, {
+    status: "running",
+    error: null,
+    resumeAt: null,
+  });
+  await addTaskRunLog(`十殿序列开始队伍“${team.name}”`, {
+    type: "info",
+    taskType: "nightmareSequenceTeam",
+    runId,
+    source,
+  });
+
+  const connect = async () => {
+    const connected = await connectNightmareTeamForSequence(team, {
+      addTaskRunLog,
+      runId,
+      source,
+    });
+    clients = connected.clients;
+    return connected;
+  };
+
+  try {
+    const connected = await connect();
+    const runner = new NightmareRunner({
+      clients: connected.clients,
+      tokens: connected.tokensById,
+      arenaFormations,
+      log: (message, type = "info") => {
+        void addTaskRunLog(message, {
+          type,
+          taskType: "nightmare",
+          runId,
+          source,
+        });
+      },
+    });
+    const result = await runner.runChallenge(team, {
+      state: tracker.challengeState ||
+        stateStore.snapshot().teams[teamId]?.challengeState || {
+          taskId: task.id,
+          teamId,
+        },
+      saveState: async (state) => {
+        await stateStore.updateTeam(teamId, {
+          status: state.phase === "paused-cross-week" ? "paused" : "running",
+          challengeState: state,
+          resumeAt: state.resumeAt || null,
+        });
+      },
+      onPause: async (state) => {
+        disconnectNightmareClients(clients);
+        clients = new Map();
+        await stateStore.updateTeam(teamId, {
+          status: "paused",
+          challengeState: state,
+          resumeAt: state.resumeAt || null,
+        });
+        const snapshot = stateStore.snapshot();
+        const crossWeekTeams = snapshot.teamSnapshots.filter((entry) =>
+          Boolean(entry.crossWeek),
+        );
+        const unfinished = crossWeekTeams.filter(
+          (entry) => snapshot.teams[String(entry.id)]?.status !== "completed",
+        );
+        if (
+          unfinished.length > 0 &&
+          unfinished.every(
+            (entry) => snapshot.teams[String(entry.id)]?.status === "paused",
+          )
+        ) {
+          await stateStore.update((current) => {
+            if (current.phase !== "blocked-cleanup") {
+              current.phase = "paused-cross-week";
+              current.resumeAt = state.resumeAt || null;
+              current.blockedTeamId = null;
+            }
+          });
+        }
+        await addTaskRunLog(`队伍“${team.name}”已断开连接，等待跨周继续`, {
+          type: "info",
+          taskType: "nightmareCrossWeek",
+          runId,
+          source,
+        });
+      },
+      onResume: async () => {
+        await stateStore.updateTeam(teamId, {
+          status: "running",
+          resumeAt: null,
+        });
+        await stateStore.update((current) => {
+          if (current.phase === "blocked-cleanup") return;
+          current.phase = "running";
+          current.resumeAt = null;
+          current.blockedTeamId = null;
+        });
+        const resumed = await connect();
+        return resumed.clients;
+      },
+      restoreFormationsOnComplete: false,
+    });
+    await stateStore.updateTeam(teamId, {
+      status: "completed",
+      success: Boolean(result.success),
+      error: null,
+      challengeState: null,
+      resumeAt: null,
+    });
+    await addTaskRunLog(
+      `十殿序列队伍“${team.name}”结束：${
+        result.success ? "挑战成功" : "配置次数已用完"
+      }`,
+      {
+        type: result.success ? "success" : "warning",
+        taskType: "nightmareSequenceTeam",
+        runId,
+        source,
+      },
+    );
+    return { teamId, ...result };
+  } catch (error) {
+    const cleanupUncertain = isNightmareCleanupUncertain(error);
+    await stateStore.updateTeam(teamId, {
+      status: cleanupUncertain ? "blocked" : "aborted",
+      success: false,
+      error: error.message,
+    });
+    await stateStore.setPhase(
+      cleanupUncertain ? "blocked-cleanup" : "stopped",
+      {
+        blockedTeamId: cleanupUncertain ? teamId : null,
+        blockedReason: cleanupUncertain ? error.message : null,
+        resumeAt: null,
+      },
+    );
+    throw error;
+  } finally {
+    disconnectNightmareClients(clients);
+  }
+}
+
+async function restoreNightmareSequenceFormations({
+  stateStore,
+  addTaskRunLog,
+  runId,
+  source,
+}) {
+  const state = stateStore.snapshot();
+  const accountIds = [
+    ...new Set(
+      state.teamSnapshots.flatMap((team) =>
+        getNightmareTeamAccountIds(team).map(String),
+      ),
+    ),
+  ];
+  if (accountIds.length === 0) {
+    return { success: true, restored: [], failed: [], targets: {} };
+  }
+  const accountSet = new Set(accountIds);
+  await tokenRefreshManager.run({ tokenIds: accountIds });
+  const allTokens = await dataStore.listTokens({ enabledOnly: true });
+  const targetTokens = allTokens.filter((token) =>
+    accountSet.has(String(token.id)),
+  );
+  const connected = await connectNightmareClients(targetTokens, {
+    addTaskRunLog,
+    runId,
+    source,
+  });
+  const runner = new NightmareRunner({
+    clients: connected.clients,
+    tokens: connected.tokensById,
+    arenaFormations:
+      state.arenaFormations || getArenaFormationMap(targetTokens),
+    log: (message, type = "info") => {
+      void addTaskRunLog(message, {
+        type,
+        taskType: "nightmareRestore",
+        runId,
+        source,
+      });
+    },
+  });
+  try {
+    return await runner.restoreFormations();
+  } finally {
+    disconnectNightmareClients(connected.clients);
+  }
+}
+
+async function runNightmareSequence({
+  task,
+  teams,
+  arenaFormations,
+  addTaskRunLog,
+  runId,
+  source,
+}) {
+  const savedState = (await dataStore.getNightmareRunState?.(task.id)) || null;
+  const stateStore = createNightmareSequenceStore(savedState, {
+    taskId: task.id,
+    teams,
+    arenaFormations,
+  });
+  const initialState = stateStore.snapshot();
+  await stateStore.setPhase("running", {
+    blockedTeamId: null,
+    blockedReason: null,
+  });
+  await addTaskRunLog(
+    `十殿序列启动，队伍顺序：${initialState.teamSnapshots
+      .map((team) => `${team.name}${team.crossWeek ? "（跨周）" : ""}`)
+      .join(" → ")}`,
+    {
+      type: "info",
+      taskType: "nightmareSequence",
+      runId,
+      source,
+    },
+  );
+
+  const runTeam = (team) =>
+    runNightmareSequenceTeam({
+      task,
+      team,
+      stateStore,
+      arenaFormations: stateStore.snapshot().arenaFormations,
+      addTaskRunLog,
+      runId,
+      source,
+    });
+
+  const crossWeekTeams = getNightmareSequenceGroups(
+    stateStore.snapshot(),
+  ).crossWeek;
+  const crossWeekResults =
+    crossWeekTeams.length > 0
+      ? await Promise.allSettled(crossWeekTeams.map(runTeam))
+      : [];
+  const crossWeekFailure = crossWeekResults.find(
+    (result) => result.status === "rejected",
+  );
+  if (crossWeekFailure) {
+    throw crossWeekFailure.reason;
+  }
+
+  const sequentialTeams = getNightmareSequenceGroups(
+    stateStore.snapshot(),
+  ).sequential;
+  for (const team of sequentialTeams) {
+    await runTeam(team);
+  }
+
+  const beforeRestore = stateStore.snapshot();
+  const incomplete = Object.values(beforeRestore.teams).filter(
+    (team) => team.status !== "completed",
+  );
+  if (incomplete.length > 0) {
+    throw new Error(
+      `十殿序列仍有未完成队伍：${incomplete
+        .map((team) => team.name || team.id)
+        .join("、")}`,
+    );
+  }
+  await addTaskRunLog("十殿序列全部队伍结束，开始统一恢复竞技场阵容", {
+    type: "info",
+    taskType: "nightmareRestore",
+    runId,
+    source,
+  });
+  const restore = await restoreNightmareSequenceFormations({
+    stateStore,
+    addTaskRunLog,
+    runId,
+    source,
+  });
+  const failedTeams = beforeRestore.teamSnapshots
+    .filter((team) => !beforeRestore.teams[String(team.id)]?.success)
+    .map((team) => team.name);
+  const success = failedTeams.length === 0 && restore.success;
+  await stateStore.setPhase("completed", {
+    success,
+    failedTeams,
+    restore,
+    completedAt: new Date().toISOString(),
+    blockedTeamId: null,
+    blockedReason: null,
+  });
+  await addTaskRunLog(
+    `十殿序列完成：${beforeRestore.teamSnapshots.length} 支队伍，${
+      failedTeams.length ? `挑战未成功：${failedTeams.join("、")}；` : ""
+    }阵容恢复 ${restore.restored.length}/${Object.keys(restore.targets || {}).length}`,
+    {
+      type: success ? "success" : "warning",
+      taskType: "taskCompleted",
+      runId,
+      source,
+    },
+  );
+  return {
+    success,
+    failedTeams,
+    restore,
+    state: stateStore.snapshot(),
+  };
+}
+
 async function verifyRefreshedGameToken(token, refreshed) {
   if (!expectedRoleIdFromToken(token)) {
     return { checked: false, expectedRoleId: null, actualRoleId: null };
@@ -457,6 +880,7 @@ async function repairTokenIdentityFromCredential(token) {
 // ==================== 任务执行引擎 ====================
 const runningTasks = new Set();
 const runningNightmareTeams = new Set();
+const nightmareSequenceGate = new NightmareSequenceGate();
 let failedTaskRetryScheduler = null;
 const tokenLockQueue = new TokenLockQueue();
 const manualLeaseManager = new ManualLeaseManager({
@@ -470,6 +894,24 @@ const tokenRefreshManager = createTokenRefreshManager({
 
 async function executeTask(task, { source = "nas", retryAttempt = 0 } = {}) {
   if (!task?.id) throw new Error("任务缺少 id");
+  const isNightmareTask = parseTaskKeys(task).includes("nightmareChallenge");
+  if (!isNightmareTask) {
+    const gateWait = await nightmareSequenceGate.wait(task.id, {
+      onWait: (ownerTaskId) => {
+        const waitMessage = `十殿序列 ${ownerTaskId} 正在运行，任务“${task.name}”进入等待队列`;
+        addLog("INFO", "task", waitMessage, { taskId: task.id });
+        void logToDb(
+          task.id,
+          null,
+          "nightmareSequenceWait",
+          "info",
+          waitMessage,
+          { source, level: "info" },
+        );
+      },
+    });
+    if (!gateWait.shouldRun) return false;
+  }
   if (runningTasks.has(task.id)) {
     addLog("WARN", "task", `任务正在执行，跳过重复调用: ${task.name}`, {
       taskId: task.id,
@@ -479,11 +921,17 @@ async function executeTask(task, { source = "nas", retryAttempt = 0 } = {}) {
 
   runningTasks.add(task.id);
   const runId = randomUUID();
+  let nightmareGateLease = null;
   let result = null;
   try {
+    if (isNightmareTask) {
+      nightmareGateLease = await nightmareSequenceGate.acquire(task.id);
+    }
     result = await executeTaskUnlocked(task, runId, { source });
     return true;
   } finally {
+    if (result?.holdNightmareGate) nightmareGateLease?.hold();
+    else nightmareGateLease?.release();
     runningTasks.delete(task.id);
     const failedTokenIds = result?.failedTokenIds || [];
     const deferredTokenIds = result?.deferredTokenIds || [];
@@ -581,7 +1029,7 @@ async function executeTaskUnlocked(task, runId, { source = "nas" } = {}) {
     return;
   }
 
-  let nightmareTeam = null;
+  let nightmareExecution = null;
   if (isNightmareChallenge) {
     if (parsedTaskKeys.length !== 1) {
       await addTaskRunLog(
@@ -590,53 +1038,96 @@ async function executeTaskUnlocked(task, runId, { source = "nas" } = {}) {
       );
       return;
     }
-    nightmareTeam = getNightmareTeam(
-      task.options?.nightmare,
-      task.options?.nightmareTeamId,
-    );
-    if (!nightmareTeam) {
-      await addTaskRunLog("没有找到可用的十殿队伍配置", {
+    const settings = normalizeNightmareSettings(task.options?.nightmare);
+    const singleTeam =
+      source === "nas-manual" && Boolean(task.options?.nightmareSingleTeam);
+    let teams;
+    if (singleTeam) {
+      const selectedTeam = getNightmareTeam(
+        settings,
+        task.options?.nightmareTeamId,
+      );
+      if (!selectedTeam) {
+        await addTaskRunLog("没有找到可立即执行的十殿队伍配置", {
+          type: "error",
+          taskType: "nightmare",
+          runId,
+          source,
+        });
+        return;
+      }
+      teams = [
+        {
+          ...selectedTeam,
+          crossWeek: false,
+          forceCrossWeek: false,
+          fastMode:
+            Boolean(task.options?.nightmareForceFastMode) ||
+            Boolean(selectedTeam.fastMode),
+        },
+      ];
+    } else {
+      teams = settings.teams
+        .filter((team) => team.enabled)
+        .map((team) => ({
+          ...team,
+          forceCrossWeek: false,
+          fastMode:
+            Boolean(task.options?.nightmareForceFastMode) ||
+            Boolean(team.fastMode),
+        }));
+    }
+    if (teams.length === 0) {
+      await addTaskRunLog("十殿序列没有启用中的队伍", {
         type: "error",
+        taskType: "nightmare",
         runId,
         source,
       });
       return;
     }
-    const teamValidation = validateNightmareTeam(nightmareTeam);
-    if (!teamValidation.valid) {
-      await addTaskRunLog(
-        `十殿队伍配置无效：${teamValidation.errors.join("；")}`,
-        { type: "error", taskType: "nightmare", runId, source },
-      );
-      return;
+    for (const team of teams) {
+      const teamValidation = validateNightmareTeam(team);
+      if (!teamValidation.valid) {
+        await addTaskRunLog(
+          `十殿队伍“${team.name || team.id}”配置无效：${teamValidation.errors.join("；")}`,
+          { type: "error", taskType: "nightmare", runId, source },
+        );
+        return;
+      }
+      Object.assign(team, teamValidation.team);
     }
-    nightmareTeam = {
-      ...teamValidation.team,
-      forceCrossWeek:
-        Boolean(task.options?.nightmareForceCrossWeek) ||
-        Boolean(nightmareTeam.forceCrossWeek),
-      fastMode:
-        Boolean(task.options?.nightmareForceFastMode) ||
-        Boolean(nightmareTeam.fastMode),
+    if (!singleTeam && ["nas-cron", "nas-scheduler"].includes(source)) {
+      const existingState =
+        (await dataStore.getNightmareRunState?.(task.id)) || null;
+      const resumable =
+        existingState?.mode === "sequence" &&
+        !["completed", "stopped", "stopped-after-cleanup"].includes(
+          existingState.phase,
+        );
+      if (!resumable && !isNightmareSequenceStartWindow()) {
+        await addTaskRunLog("自动十殿序列只允许在周日 23:50 启动，本次未执行", {
+          type: "error",
+          taskType: "nightmare",
+          runId,
+          source,
+        });
+        return;
+      }
+    }
+    nightmareExecution = {
+      kind: singleTeam ? "single" : "sequence",
+      teams,
     };
-    if (task.options?.nightmareMaxAttempts !== undefined) {
-      const maxAttempts = Math.min(
-        3,
-        Math.max(1, Number(task.options.nightmareMaxAttempts) || 1),
-      );
-      nightmareTeam.maxAttempts = maxAttempts;
-      nightmareTeam.maxRetries = maxAttempts - 1;
-    } else if (task.options?.nightmareMaxRetries !== undefined) {
-      const maxRetries = Math.min(
-        2,
-        Math.max(0, Number(task.options.nightmareMaxRetries) || 0),
-      );
-      nightmareTeam.maxRetries = maxRetries;
-      nightmareTeam.maxAttempts = maxRetries + 1;
-    }
-    tokenIds = getNightmareTeamAccountIds(nightmareTeam);
+    tokenIds = [
+      ...new Set(
+        teams.flatMap((team) => getNightmareTeamAccountIds(team).map(String)),
+      ),
+    ];
     await addTaskRunLog(
-      `自动十殿使用配置账号 ${tokenIds.length} 个，忽略任务中的手选账号`,
+      singleTeam
+        ? `手动十殿立即执行队伍“${teams[0].name}”，忽略跨周设置`
+        : `自动十殿序列将执行 ${teams.length} 支启用队伍，使用配置账号 ${tokenIds.length} 个，忽略任务中的手选账号`,
       { type: "info", taskType: "nightmare", runId, source },
     );
   }
@@ -685,8 +1176,8 @@ async function executeTaskUnlocked(task, runId, { source = "nas" } = {}) {
     });
     return;
   }
-  if (nightmareTeam) {
-    nightmareTeam.arenaFormations = getArenaFormationMap(targetTokens);
+  if (nightmareExecution) {
+    nightmareExecution.arenaFormations = getArenaFormationMap(targetTokens);
   }
 
   await addTaskRunLog(`=== 将执行于 ${targetTokens.length} 个角色 ===`, {
@@ -723,7 +1214,7 @@ async function executeTaskUnlocked(task, runId, { source = "nas" } = {}) {
   const deferredTokenIds = [];
   const seenActualRoles = new Map();
   let queued = false;
-  let taskLease = await tokenLockQueue.acquireAll(
+  const taskLease = await tokenLockQueue.acquireAll(
     targetTokens.map((token) => token.id),
     task.id,
     {
@@ -1042,51 +1533,52 @@ async function executeTaskUnlocked(task, runId, { source = "nas" } = {}) {
     return { hadErrors, deferred };
   };
 
-  if (nightmareTeam) {
-    const teamKey = String(nightmareTeam.id);
-    if (runningNightmareTeams.has(teamKey)) {
-      await addTaskRunLog(
-        `十殿队伍 ${nightmareTeam.name} 正在运行，跳过重复调用`,
-        {
-          type: "warning",
-          taskType: "nightmare",
-          runId,
-          source,
-        },
-      );
-      return;
+  if (nightmareExecution) {
+    const teamIds = nightmareExecution.teams.map((team) => String(team.id));
+    const runningTeamId = teamIds.find((teamId) =>
+      runningNightmareTeams.has(teamId),
+    );
+    if (runningTeamId) {
+      await addTaskRunLog(`十殿队伍 ${runningTeamId} 正在运行，跳过重复调用`, {
+        type: "warning",
+        taskType: "nightmare",
+        runId,
+        source,
+      });
+      taskLease.release();
+      return { hadErrors: false, failedTokenIds: [], deferredTokenIds: [] };
     }
-    runningNightmareTeams.add(teamKey);
+    teamIds.forEach((teamId) => runningNightmareTeams.add(teamId));
     let clients = new Map();
     try {
-      const connectCurrentTeam = async () => {
-        const accountIds = new Set(
-          getNightmareTeamAccountIds(nightmareTeam).map(String),
-        );
-        const allTokens = await dataStore.listTokens({ enabledOnly: true });
-        const teamTokens = allTokens.filter((token) =>
-          accountIds.has(String(token.id)),
-        );
-        if (teamTokens.length !== accountIds.size) {
-          const found = new Set(teamTokens.map((token) => String(token.id)));
-          const missing = [...accountIds].filter((id) => !found.has(id));
-          throw new Error(`十殿队伍账号不存在或已停用：${missing.join(", ")}`);
-        }
-        await tokenRefreshManager.run({
-          tokenIds: teamTokens.map((token) => token.id),
-        });
-        const latestTokens = (
-          await dataStore.listTokens({ enabledOnly: true })
-        ).filter((token) => accountIds.has(String(token.id)));
-        return connectNightmareClients(latestTokens, {
+      if (nightmareExecution.kind === "sequence") {
+        const result = await runNightmareSequence({
+          task,
+          teams: nightmareExecution.teams,
+          arenaFormations: nightmareExecution.arenaFormations,
           addTaskRunLog,
           runId,
           source,
         });
-      };
+        await dataStore.markTaskRun(task.id);
+        return {
+          hadErrors: !result.success,
+          failedTokenIds: [],
+          deferredTokenIds: [],
+        };
+      }
 
+      const nightmareTeam = nightmareExecution.teams[0];
+      const connectCurrentTeam = async () => {
+        const connected = await connectNightmareTeamForSequence(nightmareTeam, {
+          addTaskRunLog,
+          runId,
+          source,
+        });
+        clients = connected.clients;
+        return connected;
+      };
       const connected = await connectCurrentTeam();
-      clients = connected.clients;
       const savedState =
         (await dataStore.getNightmareRunState?.(task.id)) || null;
       const runner = new NightmareRunner({
@@ -1118,9 +1610,8 @@ async function executeTaskUnlocked(task, runId, { source = "nas" } = {}) {
         onPause: async (state) => {
           disconnectNightmareClients(clients);
           clients = new Map();
-          taskLease.release();
           await addTaskRunLog(
-            `跨周暂停：已释放 ${nightmareTeam.name} 账号锁和连接，${state.resumeAt} 后继续`,
+            `手动十殿暂停：${nightmareTeam.name} 的 ${state.resumeAt} 状态已保存`,
             {
               type: "info",
               taskType: "nightmareCrossWeek",
@@ -1130,10 +1621,6 @@ async function executeTaskUnlocked(task, runId, { source = "nas" } = {}) {
           );
         },
         onResume: async () => {
-          taskLease = await tokenLockQueue.acquireAll(
-            getNightmareTeamAccountIds(nightmareTeam),
-            task.id,
-          );
           const resumed = await connectCurrentTeam();
           clients = resumed.clients;
           return resumed.clients;
@@ -1150,10 +1637,11 @@ async function executeTaskUnlocked(task, runId, { source = "nas" } = {}) {
       };
       await dataStore.saveNightmareRunState?.(completedState);
       await dataStore.markTaskRun(task.id);
+      const nightmareLabel = source === "nas-manual" ? "手动十殿" : "自动十殿";
       await addTaskRunLog(
         result.success
-          ? `=== 自动十殿完成：第 ${result.attempts} 次挑战通关 1-8 层 ===`
-          : `=== 自动十殿结束：${nightmareTeam.maxAttempts} 次挑战均失败 ===`,
+          ? `=== ${nightmareLabel}完成：第 ${result.attempts} 次挑战通关 1-8 层 ===`
+          : `=== ${nightmareLabel}结束：${nightmareTeam.maxAttempts} 次挑战均失败 ===`,
         {
           type: result.success ? "success" : "error",
           taskType: "taskCompleted",
@@ -1167,7 +1655,24 @@ async function executeTaskUnlocked(task, runId, { source = "nas" } = {}) {
         deferredTokenIds: [],
       };
     } catch (error) {
-      await addTaskRunLog(`自动十殿失败：${error.message}`, {
+      const statePromise = dataStore.getNightmareRunState?.(task.id);
+      const latestState = statePromise
+        ? await statePromise.catch(() => null)
+        : null;
+      const holdNightmareGate =
+        latestState?.phase === "blocked-cleanup" ||
+        isNightmareCleanupUncertain(error);
+      if (holdNightmareGate && latestState?.phase !== "blocked-cleanup") {
+        await dataStore.saveNightmareRunState?.({
+          taskId: task.id,
+          teamId: nightmareExecution.teams[0]?.id || null,
+          mode: nightmareExecution.kind,
+          phase: "blocked-cleanup",
+          reason: error.message,
+          updatedAt: new Date().toISOString(),
+        });
+      }
+      await addTaskRunLog(`十殿执行失败：${error.message}`, {
         type: "error",
         taskType: "nightmare",
         runId,
@@ -1184,10 +1689,11 @@ async function executeTaskUnlocked(task, runId, { source = "nas" } = {}) {
         hadErrors: true,
         failedTokenIds: [],
         deferredTokenIds: [],
+        holdNightmareGate,
       };
     } finally {
       disconnectNightmareClients(clients);
-      runningNightmareTeams.delete(teamKey);
+      teamIds.forEach((teamId) => runningNightmareTeams.delete(teamId));
       taskLease.release();
     }
   }
@@ -1312,9 +1818,33 @@ async function schedulePausedNightmareResumes() {
   const runs = await dataStore.listNightmareRunStates?.();
   if (!runs) return;
   for (const state of Object.values(runs)) {
-    if (state?.phase !== "paused-cross-week" || !state.taskId) continue;
+    if (!state?.taskId) continue;
+    const isSequence = state.mode === "sequence";
+    const blocked =
+      state.phase === "blocked-cleanup" || state.phase === "blocked";
+    const resumable =
+      state.phase === "paused-cross-week" ||
+      (isSequence && state.phase === "running");
+    if (!blocked && !resumable) continue;
     const task = await dataStore.getTask(state.taskId).catch(() => null);
     if (!task) continue;
+    try {
+      nightmareSequenceGate.restore(task.id);
+    } catch (error) {
+      addLog("ERROR", "cron", `恢复十殿调度闸门失败: ${error.message}`, {
+        taskId: task.id,
+      });
+      continue;
+    }
+    if (blocked) {
+      addLog(
+        "WARN",
+        "cron",
+        `十殿任务“${task.name}”处于收尾异常状态，定时任务继续保持等待`,
+        { taskId: task.id },
+      );
+      continue;
+    }
     const resumeAt = new Date(state.resumeAt || 0).getTime();
     const delayMs = Math.max(0, resumeAt - Date.now());
     setTimeout(() => {
@@ -1334,6 +1864,77 @@ async function schedulePausedNightmareResumes() {
       { taskId: task.id },
     );
   }
+}
+
+async function releaseBlockedNightmareGateAfterCleanup(teamId) {
+  const runs = await dataStore.listNightmareRunStates?.();
+  if (!runs) return [];
+  const released = [];
+  for (const state of Object.values(runs)) {
+    if (state?.phase !== "blocked-cleanup" || !state.taskId) continue;
+    const teamIds = new Set(
+      (state.teamSnapshots || [])
+        .filter((team) => state.teams?.[String(team.id)]?.status === "blocked")
+        .map((team) => String(team.id)),
+    );
+    teamIds.add(String(state.blockedTeamId || state.teamId || ""));
+    if (!teamIds.has(String(teamId))) continue;
+    const task = await dataStore.getTask(state.taskId).catch(() => null);
+    const teams = Object.fromEntries(
+      Object.entries(state.teams || {}).map(([id, teamState]) => [
+        id,
+        String(id) === String(teamId) && teamState.status === "blocked"
+          ? { ...teamState, status: "cleanup-confirmed" }
+          : teamState,
+      ]),
+    );
+    const remainingBlocked = Object.values(teams).filter(
+      (teamState) => teamState.status === "blocked",
+    );
+    await dataStore.saveNightmareRunState?.({
+      ...state,
+      phase:
+        remainingBlocked.length > 0
+          ? "blocked-cleanup"
+          : "stopped-after-cleanup",
+      teams,
+      success: false,
+      stoppedAt:
+        remainingBlocked.length > 0
+          ? state.stoppedAt
+          : new Date().toISOString(),
+      blockedTeamId: remainingBlocked[0]?.id || null,
+      blockedReason: remainingBlocked.length > 0 ? state.blockedReason : null,
+    });
+    if (remainingBlocked.length > 0) {
+      addLog(
+        "WARN",
+        "nightmare",
+        `队伍 ${teamId} 已手动清理，但仍有 ${remainingBlocked.length} 支异常队伍未确认解散`,
+        { taskId: state.taskId, teamId },
+      );
+      continue;
+    }
+    nightmareSequenceGate.releaseOwner(state.taskId);
+    released.push(state.taskId);
+    addLog(
+      "INFO",
+      "nightmare",
+      `手动清理队伍 ${teamId} 成功，已解除十殿调度闸门`,
+      { taskId: state.taskId, teamId },
+    );
+    await logToDb(
+      state.taskId,
+      null,
+      "nightmareGateReleased",
+      "info",
+      task
+        ? `任务“${task.name}”的异常十殿收尾已清理，定时任务恢复执行`
+        : `十殿任务 ${state.taskId} 的异常收尾已清理，定时任务恢复执行`,
+      { source: "nas-manual", level: "info" },
+    );
+  }
+  return released;
 }
 
 function registerCron(task) {
@@ -1397,6 +1998,44 @@ function registerCron(task) {
               { taskId: task.id },
             );
           }
+          const gateWait = await nightmareSequenceGate.wait(task.id, {
+            onWait: (ownerTaskId) => {
+              const waitMessage = `十殿序列 ${ownerTaskId} 正在运行，任务“${task.name}”进入等待队列`;
+              addLog("INFO", "cron", waitMessage, { taskId: task.id });
+              void logToDb(
+                task.id,
+                null,
+                "nightmareSequenceWait",
+                "info",
+                waitMessage,
+                { source: "nas-cron", level: "info" },
+              );
+            },
+          });
+          if (!gateWait.shouldRun) {
+            addLog(
+              "INFO",
+              "cron",
+              `任务“${task.name}”已在十殿等待队列中，忽略重复触发`,
+              { taskId: task.id },
+            );
+            return;
+          }
+          if (gateWait.waited) {
+            runnableTask = await dataStore.getTask(task.id);
+            if (!runnableTask?.enabled) {
+              addLog(
+                "INFO",
+                "cron",
+                `十殿序列结束，但任务“${task.name}”已停用，取消补跑`,
+                { taskId: task.id },
+              );
+              return;
+            }
+            addLog("INFO", "cron", `十殿序列结束，开始补跑任务“${task.name}”`, {
+              taskId: task.id,
+            });
+          }
           await executeTask(runnableTask, { source: "nas-cron" });
         } catch (err) {
           addLog("ERROR", "cron", `任务执行异常: ${task.name}`, {
@@ -1428,8 +2067,8 @@ async function init() {
   );
 
   await dataStore.init();
-  await registerAllCrons();
   await schedulePausedNightmareResumes();
+  await registerAllCrons();
 
   // 每天上海时间 00:00 删除前天及更早的日志，保留今天和昨天。
   cron.schedule(
@@ -1871,6 +2510,7 @@ app.get("/api/nightmare/status", async (req, res) => {
   try {
     res.json({
       runningTeamIds: [...runningNightmareTeams],
+      scheduledGate: nightmareSequenceGate.snapshot(),
       runs: (await dataStore.listNightmareRunStates?.()) || {},
       accountLocks: tokenLockQueue.snapshot(),
     });
@@ -1930,6 +2570,7 @@ app.post("/api/nightmare/teams/:id/disband", async (req, res) => {
     const { team } = await loadNightmareTeamById(req.params.id);
     const result = await disbandNightmareTeamManually(team);
     nightmareTeamStatusCache.delete(String(team.id));
+    await releaseBlockedNightmareGateAfterCleanup(team.id);
     res.json(result);
   } catch (error) {
     res.status(400).json({ error: error.message });
@@ -1939,6 +2580,11 @@ app.post("/api/nightmare/teams/:id/disband", async (req, res) => {
 app.post("/api/nightmare/teams/:id/start", async (req, res) => {
   try {
     const { settings, team } = await loadNightmareTeamById(req.params.id);
+    if (nightmareSequenceGate.isActive()) {
+      return res.status(409).json({
+        error: "十殿序列或其他十殿任务正在运行，请等待结束后再立即执行",
+      });
+    }
     const validation = validateNightmareSettings(settings.nightmare);
     if (!validation.valid) {
       return res.status(400).json({ error: validation.errors.join("；") });
@@ -1960,6 +2606,7 @@ app.post("/api/nightmare/teams/:id/start", async (req, res) => {
       options: {
         nightmare: settings.nightmare,
         nightmareTeamId: team.id,
+        nightmareSingleTeam: true,
       },
     };
     nightmareTeamStatusCache.delete(String(team.id));
@@ -2218,6 +2865,13 @@ app.post("/api/tasks", async (req, res) => {
     if (!preview.valid) {
       return res.status(400).json({ error: preview.message });
     }
+    const nightmareScheduleError = validateNightmareSequenceCron(
+      req.body,
+      preview.normalized,
+    );
+    if (nightmareScheduleError) {
+      return res.status(400).json({ error: nightmareScheduleError });
+    }
     const created = await dataStore.createTask({
       ...req.body,
       cron_expr: preview.normalized,
@@ -2242,6 +2896,20 @@ app.patch("/api/tasks/:id", async (req, res) => {
     const preview = previewCronExpression(cronExpr);
     if (!preview.valid) {
       return res.status(400).json({ error: preview.message });
+    }
+    const nightmareScheduleError = validateNightmareSequenceCron(
+      {
+        ...current,
+        ...req.body,
+        selected_tasks:
+          req.body.selected_tasks !== undefined
+            ? req.body.selected_tasks
+            : current.selected_tasks,
+      },
+      preview.normalized,
+    );
+    if (nightmareScheduleError) {
+      return res.status(400).json({ error: nightmareScheduleError });
     }
     const mergedOptions = {
       ...(current.options || {}),
@@ -2268,6 +2936,7 @@ app.patch("/api/tasks/:id", async (req, res) => {
 app.delete("/api/tasks/:id", async (req, res) => {
   try {
     await dataStore.deleteTask(req.params.id);
+    nightmareSequenceGate.releaseOwner(req.params.id);
     if (typeof dataStore.deleteNightmareRunState === "function") {
       await dataStore.deleteNightmareRunState(req.params.id).catch(() => {});
     }
@@ -2281,6 +2950,11 @@ app.delete("/api/tasks/:id", async (req, res) => {
 app.post("/api/tasks/:id/run", async (req, res) => {
   const task = await dataStore.getTask(req.params.id);
   if (!task) return res.status(404).json({ error: "任务不存在" });
+  if (parseTaskKeys(task).includes("nightmareChallenge")) {
+    return res.status(409).json({
+      error: "自动十殿不允许从定时任务列表立即执行，请到十殿配置页单队开始挑战",
+    });
+  }
   if (runningTasks.has(task.id)) {
     return res.status(409).json({ error: "任务正在执行" });
   }

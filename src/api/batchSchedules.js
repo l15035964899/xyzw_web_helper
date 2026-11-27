@@ -104,8 +104,12 @@ export function serverTaskToUi(task = {}) {
 }
 
 export function uiTaskToServer(task, { existingOptions = {} } = {}) {
-  const cronExpression =
-    task.runType === "daily"
+  const isNightmareSequence =
+    task.selectedTasks?.includes("nightmareChallenge");
+  const runType = isNightmareSequence ? "cron" : task.runType;
+  const cronExpression = isNightmareSequence
+    ? "50 23 * * 0"
+    : task.runType === "daily"
       ? dailyTimeToCron(task.runTime)
       : String(task.cronExpression || "").trim();
   const options = {
@@ -114,12 +118,10 @@ export function uiTaskToServer(task, { existingOptions = {} } = {}) {
   const legionId = Number(task.legionApplyTargetId || 0);
   if (legionId > 0) options.legionId = legionId;
   else delete options.legionId;
-  if (task.selectedTasks?.includes("nightmareChallenge")) {
-    if (task.nightmareTeamId) {
-      options.nightmareTeamId = String(task.nightmareTeamId);
-    } else {
-      delete options.nightmareTeamId;
-    }
+  if (isNightmareSequence) {
+    options.nightmareSequence = true;
+    delete options.nightmareSingleTeam;
+    delete options.nightmareTeamId;
   }
   if (task.selectedTasks?.includes("nightmareCharmPurchase")) {
     options.charmLayers = [
@@ -156,8 +158,8 @@ export function uiTaskToServer(task, { existingOptions = {} } = {}) {
   return {
     id: task.id || undefined,
     name: String(task.name || "").trim(),
-    schedule_type: task.runType,
-    run_time: task.runType === "daily" ? task.runTime : null,
+    schedule_type: runType,
+    run_time: runType === "daily" ? task.runTime : null,
     cron_expr: cronExpression,
     selected_tasks: [...task.selectedTasks],
     selected_tokens: [...task.selectedTokens],

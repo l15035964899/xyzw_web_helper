@@ -38,3 +38,13 @@ test("scheduled charm task exposes independent layer and quantity controls", () 
     /taskForm\.selectedTasks\.includes\('batchArenaClearTickets'\)/,
   );
 });
+
+test("nightmare sequence is scheduled-only and cannot run from the task list", () => {
+  assert.match(batchDaily, /50 23 \* \* 0/);
+  assert.match(
+    batchDaily,
+    /:disabled="\s*task\.selectedTasks\.includes\('nightmareChallenge'\)\s*"/,
+  );
+  assert.match(batchDaily, /自动十殿请到十殿配置页单队开始挑战/);
+  assert.match(batchDaily, /按十殿配置页顺序执行所有启用队伍/);
+});

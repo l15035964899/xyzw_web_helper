@@ -1891,6 +1891,14 @@
                     type="info"
                     secondary
                     :loading="executingTaskIds.includes(task.id)"
+                    :disabled="
+                      task.selectedTasks.includes('nightmareChallenge')
+                    "
+                    :title="
+                      task.selectedTasks.includes('nightmareChallenge')
+                        ? '自动十殿请到十殿配置页单队开始挑战'
+                        : ''
+                    "
                     @click="manualExecuteTask(task)"
                   >
                     执行
@@ -2016,6 +2024,7 @@
             <label class="setting-label">运行类型</label>
             <n-radio-group
               v-model:value="taskForm.runType"
+              :disabled="taskForm.selectedTasks.includes('nightmareChallenge')"
               @update:value="resetRunType"
             >
               <n-radio value="daily">每天固定时间</n-radio>
@@ -2031,6 +2040,7 @@
             <n-input
               v-model:value="taskForm.cronExpression"
               placeholder="请输入Cron表达式"
+              :readonly="taskForm.selectedTasks.includes('nightmareChallenge')"
               @input="parseCronExpression"
             />
 
@@ -2221,16 +2231,16 @@
             v-if="taskForm.selectedTasks.includes('nightmareChallenge')"
             class="setting-item"
           >
-            <label class="setting-label">自动十殿队伍</label>
-            <n-select
-              v-model:value="taskForm.nightmareTeamId"
-              :options="nightmareTeamOptions"
-              placeholder="选择十殿配置中的队伍"
-              clearable
-            />
+            <label class="setting-label">自动十殿序列</label>
+            <n-alert type="info" :bordered="false">
+              按十殿配置页顺序执行所有启用队伍，关闭的队伍自动跳过。跨周队伍在周日
+              23:50
+              自动启动；定时任务列表不允许手动执行十殿，单队立即执行请使用十殿配置页。
+            </n-alert>
             <div style="font-size: 12px; color: #86909c">
-              保存任务时会自动使用该队伍配置中的成员账号。自动十殿任务必须单独创建，不能与其他任务类型混用。
-              跨周模式建议使用 Sunday 23:30 的 Cron：<code>30 23 * * 0</code>。
+              当前启用队伍：{{
+                enabledNightmareTeamNames || "无"
+              }}。自动十殿固定使用 <code>50 23 * * 0</code>。
             </div>
             <n-button
               size="tiny"
@@ -4261,11 +4271,24 @@ const groupedAvailableTasks = computed(() => {
   return groups;
 });
 
-const nightmareTeamOptions = computed(() =>
-  (batchSettings.nightmare?.teams || []).map((team) => ({
-    label: `${team.name || team.id}${team.enabled === false ? "（停用）" : ""}`,
-    value: team.id,
-  })),
+const enabledNightmareTeams = computed(() =>
+  (batchSettings.nightmare?.teams || []).filter((team) => team.enabled),
+);
+const enabledNightmareTeamNames = computed(() =>
+  enabledNightmareTeams.value
+    .map((team) => team.name || team.id)
+    .filter(Boolean)
+    .join(" → "),
+);
+
+watch(
+  () => taskForm.selectedTasks.includes("nightmareChallenge"),
+  (selected) => {
+    if (!selected) return;
+    taskForm.runType = "cron";
+    taskForm.cronExpression = "50 23 * * 0";
+    taskForm.nightmareTeamId = null;
+  },
 );
 
 // Cron表达式解析相关变量
@@ -4282,6 +4305,10 @@ const executingTaskIds = ref([]);
 // Manual execute task
 const manualExecuteTask = async (task) => {
   if (executingTaskIds.value.includes(task.id)) return;
+  if (task.selectedTasks.includes("nightmareChallenge")) {
+    message.warning("自动十殿请到十殿配置页单队开始挑战");
+    return;
+  }
 
   executingTaskIds.value.push(task.id);
   try {
@@ -4508,6 +4535,13 @@ const saveTask = async () => {
     return;
   }
 
+  const isNightmareSequence =
+    taskForm.selectedTasks.includes("nightmareChallenge");
+  if (isNightmareSequence) {
+    taskForm.runType = "cron";
+    taskForm.cronExpression = "50 23 * * 0";
+  }
+
   if (taskForm.runType === "daily" && !taskForm.runTime) {
     message.warning("请选择运行时间");
     return;
@@ -4536,25 +4570,30 @@ const saveTask = async () => {
     return;
   }
 
-  if (taskForm.selectedTasks.includes("nightmareChallenge")) {
+  if (
+    taskForm.selectedTasks.includes("nightmareCharmPurchase") &&
+    taskForm.charmLayers.length === 0
+  ) {
+    message.warning("抢符咒任务至少要选择一个层级");
+    return;
+  }
+
+  if (isNightmareSequence) {
     if (taskForm.selectedTasks.length !== 1) {
       message.warning("自动十殿必须单独创建定时任务，不能与其他任务混用");
       return;
     }
-    if (!taskForm.nightmareTeamId) {
-      message.warning("请选择自动十殿队伍");
+    if (enabledNightmareTeams.value.length === 0) {
+      message.warning("十殿配置中没有启用中的队伍");
       return;
     }
-    const team = (batchSettings.nightmare?.teams || []).find(
-      (entry) => String(entry.id) === String(taskForm.nightmareTeamId),
-    );
-    if (!team) {
-      message.warning("选中的十殿队伍配置不存在，请重新打开配置");
-      return;
-    }
-    taskForm.selectedTokens = (team.members || [])
-      .map((entry) => String(entry.tokenId))
-      .filter(Boolean);
+    taskForm.selectedTokens = [
+      ...new Set(
+        enabledNightmareTeams.value.flatMap((team) =>
+          (team.members || []).map((entry) => String(entry.tokenId)),
+        ),
+      ),
+    ].filter(Boolean);
   }
 
   if (taskForm.selectedTokens.length === 0) {
@@ -4608,7 +4647,7 @@ const saveTask = async () => {
     selectedTokens: [...taskForm.selectedTokens],
     selectedTasks: [...taskForm.selectedTasks],
     legionApplyTargetId: Number(taskForm.legionApplyTargetId || 0) || null,
-    nightmareTeamId: taskForm.nightmareTeamId || null,
+    nightmareTeamId: null,
     charmLayers,
     charmTargets,
     arenaTicketCount: Math.max(

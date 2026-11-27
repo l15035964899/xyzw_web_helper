@@ -13,7 +13,7 @@ const component = await readFile(
 const { sanitizeNightmareSettings, validateNightmareSettingsForUi } =
   await loadModule(new URL("../src/utils/nightmare.js", import.meta.url));
 
-test("nightmare UI removes duplicate accounts inside and across teams", () => {
+test("nightmare UI removes same-team duplicates but allows shared accounts across teams", () => {
   const settings = sanitizeNightmareSettings({
     teams: [
       {
@@ -53,10 +53,12 @@ test("nightmare UI removes duplicate accounts inside and across teams", () => {
   ]);
   assert.deepEqual(
     Array.from(settings.teams[1].members, (entry) => entry.tokenId),
-    ["d"],
+    ["c", "d"],
   );
-  assert.equal(settings.teams[1].leaderTokenId, "");
+  assert.equal(settings.teams[1].leaderTokenId, "c");
   assert.equal(settings.teams[1].mainTokenId, "d");
+  assert.equal(settings.teams[0].crossWeek, true);
+  assert.equal(settings.teams[1].crossWeek, false);
   assert.equal(
     validateNightmareSettingsForUi({ teams: [] }).join("|"),
     "至少创建一套十殿队伍",
@@ -81,7 +83,19 @@ test("new team action is an inline plus and stage order tags are numbered", asyn
   assert.match(component, /border-radius:\s*2px/);
   assert.match(component, /:render-tag="renderStageTag\(stage\)"/);
   assert.match(component, /stage-order-number/);
+  assert.match(component, /序列第一支实际队伍，强制跨周/);
+  assert.match(component, /与跨周队伍/);
   assert.doesNotMatch(component, /抢符咒快速测试/);
   assert.doesNotMatch(component, /战斗命令由队长连接发送/);
   assert.doesNotMatch(runner, /战斗命令由队长连接发送/);
+});
+
+test("team members and presets appear before leader and main role selectors", () => {
+  const members = component.indexOf("队伍成员与阵容");
+  const leader = component.indexOf("队长</div>");
+  const main = component.indexOf("主力（唯一使用恢复）");
+
+  assert.ok(members >= 0);
+  assert.ok(leader > members);
+  assert.ok(main > leader);
 });

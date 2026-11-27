@@ -35,23 +35,72 @@ export const defaultNightmareSettings = {
 
 export function cloneNightmareSettings(settings) {
   const source =
-    settings && typeof settings === "object" ? settings : defaultNightmareSettings;
+    settings && typeof settings === "object"
+      ? settings
+      : defaultNightmareSettings;
   return JSON.parse(JSON.stringify(source));
+}
+
+function teamMemberIds(team) {
+  return new Set(
+    (team?.members || [])
+      .map((entry) => String(entry?.tokenId || ""))
+      .filter(Boolean),
+  );
+}
+
+function memberOverlap(left, right) {
+  const leftIds = teamMemberIds(left);
+  return (right?.members || []).some((entry) => {
+    const tokenId = String(entry?.tokenId || "");
+    return tokenId && leftIds.has(tokenId);
+  });
+}
+
+export function buildNightmareSequencePlan(teams = []) {
+  const activeCrossWeekTeams = [];
+  let hasEnabledTeam = false;
+  return teams.map((team, index) => {
+    const forcedAnchor = team.enabled && !hasEnabledTeam;
+    if (forcedAnchor) {
+      hasEnabledTeam = true;
+    }
+    const conflictTeamIds = forcedAnchor
+      ? []
+      : activeCrossWeekTeams
+          .filter((activeTeam) => memberOverlap(activeTeam, team))
+          .map((activeTeam) => activeTeam.id);
+    const crossWeekLocked = conflictTeamIds.length > 0;
+    const crossWeek = forcedAnchor
+      ? true
+      : crossWeekLocked
+        ? false
+        : Boolean(team.crossWeek);
+    if (team.enabled && crossWeek) activeCrossWeekTeams.push(team);
+    return {
+      index,
+      teamId: team.id,
+      teamName: team.name,
+      enabled: team.enabled,
+      crossWeek,
+      crossWeekLocked: forcedAnchor || crossWeekLocked,
+      conflictTeamIds,
+    };
+  });
 }
 
 export function sanitizeNightmareSettings(settings) {
   const value = cloneNightmareSettings(settings);
   value.teams = Array.isArray(value.teams) ? value.teams.slice(0, 3) : [];
-  const usedAccounts = new Set();
   for (const team of value.teams) {
+    team.enabled = team.enabled !== false;
     const seenInTeam = new Set();
     team.members = (team.members || []).filter((member) => {
       const tokenId = String(member?.tokenId || "");
-      if (!tokenId || usedAccounts.has(tokenId) || seenInTeam.has(tokenId)) {
+      if (!tokenId || seenInTeam.has(tokenId)) {
         return false;
       }
       seenInTeam.add(tokenId);
-      usedAccounts.add(tokenId);
       member.tokenId = tokenId;
       member.formation = Math.min(
         6,
@@ -92,6 +141,10 @@ export function sanitizeNightmareSettings(settings) {
     );
     team.maxAttempts = team.maxRetries + 1;
   }
+  const plan = buildNightmareSequencePlan(value.teams);
+  value.teams.forEach((team, index) => {
+    team.crossWeek = plan[index].crossWeek;
+  });
   return value;
 }
 
@@ -127,20 +180,12 @@ export function validateNightmareSettingsForUi(settings) {
   const teams = settings?.teams || [];
   if (teams.length === 0) return ["至少创建一套十殿队伍"];
   const errors = [];
-  const seen = new Set();
   for (const team of teams) {
     errors.push(
       ...validateNightmareTeamForUi(team).map(
         (message) => `${team.name || team.id}: ${message}`,
       ),
     );
-    for (const member of team.members || []) {
-      if (!member.tokenId) continue;
-      if (seen.has(String(member.tokenId))) {
-        errors.push(`账号 ${member.tokenId} 同时出现在多套队伍中`);
-      }
-      seen.add(String(member.tokenId));
-    }
   }
   return errors;
 }

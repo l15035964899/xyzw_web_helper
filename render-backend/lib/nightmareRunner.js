@@ -1396,6 +1396,7 @@ export class NightmareRunner {
       saveState = async () => {},
       onPause = null,
       onResume = null,
+      restoreFormationsOnComplete = true,
     } = {},
   ) {
     this.attachRoomListeners();
@@ -1579,11 +1580,21 @@ export class NightmareRunner {
         `十殿流程暂停，保留队伍和房间等待人工处理：${error.message}`,
         "error",
       );
+      if (!this.teamCleanupConfirmed && (this.roomId || this.teamId)) {
+        error.cleanupUncertain = true;
+      }
       throw error;
     } finally {
       this.logSoftErrorSummary();
       if (this.teamCleanupConfirmed) {
-        await this.restoreFormations();
+        if (restoreFormationsOnComplete) {
+          await this.restoreFormations();
+        } else {
+          this.log(
+            "队伍已解散，竞技场阵容留待十殿序列全部结束后统一恢复",
+            "info",
+          );
+        }
       } else {
         this.log(
           "未确认十殿队伍已解散，跳过恢复预设阵容，避免半途恢复失败",

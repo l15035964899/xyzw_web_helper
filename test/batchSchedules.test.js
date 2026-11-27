@@ -82,3 +82,21 @@ test("task-specific charm layers and arena ticket count round-trip independently
   );
   assert.equal(body.options.arenaTicketCount, 100);
 });
+
+test("nightmare scheduled task is fixed to the Sunday 23:50 sequence", () => {
+  const body = module.uiTaskToServer({
+    name: "自动十殿",
+    runType: "daily",
+    runTime: "08:00",
+    selectedTasks: ["nightmareChallenge"],
+    selectedTokens: ["account-a"],
+    enabled: true,
+  });
+
+  assert.equal(body.schedule_type, "cron");
+  assert.equal(body.cron_expr, "50 23 * * 0");
+  assert.equal(body.run_time, null);
+  assert.equal(body.options.nightmareSequence, true);
+  assert.equal(body.options.nightmareTeamId, undefined);
+  assert.equal(body.options.nightmareSingleTeam, undefined);
+});

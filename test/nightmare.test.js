@@ -75,14 +75,35 @@ test("nightmare retry configuration can disable retries", () => {
   assert.equal(settings.teams[0].maxAttempts, 1);
 });
 
-test("nightmare validation rejects missing leaders and duplicate team accounts", () => {
+test("shared main forces a disabled later team cross-week setting off", () => {
+  const settings = normalizeNightmareSettings({
+    teams: [
+      team(),
+      team({
+        id: "team-b",
+        name: "共享主力",
+        enabled: false,
+        crossWeek: true,
+      }),
+    ],
+  });
+  assert.equal(settings.teams[1].enabled, false);
+  assert.equal(settings.teams[1].crossWeek, false);
+});
+
+test("nightmare validation rejects missing leaders and allows shared members across teams", () => {
   const invalidTeam = team({ leaderTokenId: "" });
   const validation = validateNightmareSettings({
     teams: [invalidTeam, { ...team({ id: "team-b" }), name: "重复账号" }],
   });
   assert.equal(validation.valid, false);
   assert.match(validation.errors.join("；"), /队长/);
-  assert.match(validation.errors.join("；"), /同时出现在多套十殿队伍中/);
+  assert.doesNotMatch(validation.errors.join("；"), /同时出现在多套十殿队伍中/);
+
+  const shared = validateNightmareSettings({
+    teams: [team(), team({ id: "team-b", name: "共享队伍" })],
+  });
+  assert.equal(shared.valid, true);
 });
 
 test("main-role detection falls back to the stable role suffix in the member name", () => {
@@ -471,6 +492,42 @@ test("successful challenge is dismissed before preset formations are restored", 
     roomId: "room-1",
   });
   assert.deepEqual(order, ["dismiss", "restore"]);
+});
+
+test("sequence teams defer arena restoration until every team has finished", async () => {
+  let restored = 0;
+  const runner = new NightmareRunner({
+    clients: new Map(),
+    tokens: new Map(),
+    sleep: async () => {},
+    now: () => new Date("2026-11-23T02:00:00.000Z"),
+  });
+  runner.attachRoomListeners = () => {};
+  runner.dispose = () => {};
+  runner.initializeRoleIds = async () => {};
+  runner.prepareMembers = async () => {
+    runner.teamId = "match-team-1";
+    runner.activeTokenIds = ["a", "b"];
+    return { teamId: runner.teamId, activeTokenIds: ["a", "b"] };
+  };
+  runner.openRoom = async () => {
+    runner.roomId = "room-1";
+  };
+  runner.runLayer = async () => true;
+  runner.dismissChallenge = async () => {
+    runner.teamCleanupConfirmed = true;
+  };
+  runner.restoreFormations = async () => {
+    restored += 1;
+  };
+
+  const result = await runner.runChallenge(team({ maxAttempts: 1 }), {
+    state: { taskId: "task-a" },
+    restoreFormationsOnComplete: false,
+  });
+
+  assert.equal(result.success, true);
+  assert.equal(restored, 0);
 });
 
 test("a newly opened room ignores a stale saved layer and starts from layer 1", async () => {
@@ -900,7 +957,11 @@ test("preset formations are not restored when team disband cannot be confirmed",
     runner.runChallenge(team({ maxAttempts: 1 }), {
       state: { taskId: "task-a" },
     }),
-    /队伍仍在/,
+    (error) => {
+      assert.match(error.message, /队伍仍在/);
+      assert.equal(error.cleanupUncertain, true);
+      return true;
+    },
   );
   assert.equal(restored, 0);
 });
