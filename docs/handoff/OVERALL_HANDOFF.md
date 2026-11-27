@@ -3,9 +3,10 @@
 > 更新时间：2026-11-27 CST
 > 适用对象：第一次接手本项目的开发者或新会话
 > 当前分支：`main`
-> 最近发布代码：`79e5228`
-> 最近部署镜像：`ghcr.io/l15035964899/xyzw-nas-all:b3d616f-weekly-gift-20261127-r1`
+> 最近发布代码：`792bcfc`
+> 最近部署镜像：`ghcr.io/l15035964899/xyzw-nas-all:05b2ab6-nas-pushing-20261127-r1`
 > 当前 Fork：`git@github.com:l15035964899/xyzw_web_helper.git`
+> 镜像说明：标签沿用构建时 `05b2ab6`，功能内容与提交 `1fb7ca6`、`792bcfc` 一致。
 
 ## 0. 文档定位
 
@@ -26,7 +27,7 @@
 | --- | --- |
 | NAS | `192.168.0.222:3002` |
 | 容器 | `xyzw-nas-all`，`running / healthy` |
-| 镜像 | `ghcr.io/l15035964899/xyzw-nas-all:b3d616f-nightmare-sequence-20261127-r3` |
+| 镜像 | `ghcr.io/l15035964899/xyzw-nas-all:05b2ab6-nas-pushing-20261127-r1` |
 | 存储 | `STORE_MODE=local` |
 | 健康接口 | `status=ok`、`activeCrons=12` |
 | NAS 账号 | 12 个，全部启用 |
@@ -34,7 +35,8 @@
 | NAS 任务 | 以 `/api/tasks` 实时数据为准；健康接口 `activeCrons=12` |
 | 十殿任务 | 当前没有运行中的队伍 |
 | 抢符任务 | 每日 `59 11 * * *`，3 个账号，任务内等待 12:00 |
-| Web/服务端测试 | 310 项通过 |
+| NAS 推图 | 已完成单账号在线运行，关闭浏览器、定时让锁和重启恢复仍待专项验收 |
+| Web/服务端测试 | 329 项通过 |
 | 桌面端测试 | 17 项通过 |
 | 桌面端版本 | `2.1.3` |
 
@@ -81,7 +83,7 @@ origin/main = cf45acf
 | 角色身份与 Token | [role-identity-and-token.md](requirements/role-identity-and-token.md) | 已实现并在线验证 |
 | 桌面端与 BIN | [desktop-client-and-bin.md](requirements/desktop-client-and-bin.md) | 已实现 |
 | 日常任务可靠性 | [daily-task-reliability.md](requirements/daily-task-reliability.md) | 已实现主要修复 |
-| NAS 原生自动推图 | [nas-auto-pushing.md](requirements/nas-auto-pushing.md) | 设计完成，尚未实现 |
+| NAS 原生自动推图 | [nas-auto-pushing.md](requirements/nas-auto-pushing.md) | 已实现并部署，单账号在线运行通过 |
 | 后续路线 | [future-roadmap.md](requirements/future-roadmap.md) | 部分已实现，其余需求集中记录 |
 
 需求目录另有 [索引](requirements/README.md)。
@@ -105,6 +107,7 @@ origin/main = cf45acf
 /volume1/docker/xyzw-nas-all/data/task-logs.jsonl
 /volume1/docker/xyzw-nas-all/data/token-refresh-credentials.json
 /volume1/docker/xyzw-nas-all/data/nightmare-runs.json
+/volume1/docker/xyzw-nas-all/data/pushing-runs.json
 ```
 
 Cloudflare、Render、Supabase 暂不是运行依赖。没有明确授权，不删除这些云端资源，
@@ -132,6 +135,10 @@ Cloudflare、Render、Supabase 暂不是运行依赖。没有明确授权，不�
 | 桌面端 | `desktop/` | Electron、本地代理和临时 BIN |
 | 十殿核心 | `render-backend/lib/nightmareRunner.js`、`nightmareSettings.js` | 建队、挑战、跨周、符咒 |
 | 十殿 UI | `src/components/Nightmare/NightmareConfigModal.vue` | 队伍和出战顺序配置 |
+| NAS 推图会话 | `render-backend/lib/pushSessionManager.js` | 多账号并发、让锁、重启恢复和停止 |
+| NAS 推图单账号 | `render-backend/lib/pushRunner.js` | 连接、计算、战斗、结算核对和重登 |
+| NAS 推图状态 | `render-backend/lib/pushState.js` | 状态规范化、持久化白名单和日志映射 |
+| 主线推关页面 | `src/views/PushingLevels.vue` | 浏览器 / NAS 切换、状态、日志和手动火把 |
 | 测试 | `test/*.test.js`、`desktop/test/*.test.cjs` | 服务端、前端和桌面端验证 |
 
 ## 6. 开发前检查
@@ -160,7 +167,13 @@ GET /api/nightmare/status
 GET /api/nightmare/teams/:id/status?refresh=1
 ```
 
-6. 修改前确认没有真实任务正在使用目标账号。
+6. 涉及 NAS 推图时额外检查：
+
+```text
+GET /api/pushing/status
+```
+
+7. 修改前确认没有真实任务正在使用目标账号。
 
 ## 7. 通用代码修改入口
 
@@ -311,6 +324,7 @@ GET /api/tasks/runtime
 7. 周常限时商店只有招募周完成，宝箱周和黑市周仍待补。
 8. Fork 上仍存在历史分支 `codex/v3-refactor`，本次未删除。
 9. 共享主力序列已完成自动测试和单队真机验证，多队跨周仍需实机演练。
+10. NAS 推图进度条当前一直为 0；状态卡只有剩余时间，没有持久化本场初始时长，已记录为后续优化。
 
 ## 12. 最终检查清单
 

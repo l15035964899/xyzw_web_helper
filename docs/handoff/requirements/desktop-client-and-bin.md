@@ -112,6 +112,7 @@ desktop/release/
 ```
 
 macOS 需要本地网络权限。正式版本应使用固定 UUID 和代码签名。
+构建隔离测试忽略 macOS Finder 自动改写的 `.DS_Store`，避免系统元数据被误判为源码或 `dist` 发生变化。
 
 ## 7. 禁止事项
 

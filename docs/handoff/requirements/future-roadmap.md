@@ -1,7 +1,7 @@
 # 后续功能路线
 
-> 状态：部分功能已实现，未发布内容仍为设计方向
-> 本文件记录设计、确认规则和实现状态
+> 状态：近期功能已实现并部署，剩余待优化事项继续记录
+> 本文件记录已实现功能摘要、已知问题和后续方向
 
 ## 0. PR 评估记录
 
@@ -9,7 +9,7 @@
 
 链接：https://github.com/w1249178256/xyzw_web_helper/pull/433
 
-状态：已完成本地代码接入，待后续提交。
+状态：已实现、提交并部署（`8e8b6d6`）。
 
 采用内容：
 
@@ -200,19 +200,89 @@ test/nightmare.test.js
 test/nightmareUi.test.js
 ```
 
-## 5. 运行状态持久化
+## 5. NAS 原生自动推关
 
-当前部分运行队列和状态缓存在内存中。跨周十殿状态已写入
-`nightmare-runs.json`，但容器重启后仍需通过 API 检查和恢复。
+状态：已实现、提交并部署（2026-11-27），单账号在线运行通过。
 
-可考虑：
+已实现能力：
 
-- 持久化队列状态。
+- 改造现有“主线推关”页面，保留浏览器 / NAS 切换，默认 NAS。
+- NAS 持有账号连接后，关闭浏览器或路由离开页面不会停止推图。
+- 最大并发 `1～5`，默认 `5`；账号数超过并发数时按账号轮转分片，避免只推第一个账号。
+- 自动任务等待任一推图账号时，整个会话在当前战斗结算后暂停、断开并释放全部账号锁；任务结束后自动恢复。
+- 手动停止立即强制断开并释放锁，不等待当前战斗结束。
+- 被顶号后按会话配置的 `0～120` 分钟延迟无限重登，并累计顶号次数。
+- 每个 100 关自动升级挂机默认开启，可按会话关闭。
+- 火把只允许用户手动选择类型、数量并点击使用，推图循环不会自动消耗。
+- `fight_level` 超时后先读取真实关卡确认结果，禁止盲目重复发送结算。
+- `pushing-runs.json` 持久化会话，NAS 容器重启后自动恢复未停止会话。
+- SIGTERM/SIGINT 退出前强制保存推图状态。
+- 页面轮询 NAS 状态和权威任务日志；卸载页面只清理浏览器定时器，不停止 NAS 会话。
+- 同一账号在 NAS 推图期间禁止再从浏览器模式启动。
+
+后端入口：
+
+```text
+render-backend/lib/pushState.js
+render-backend/lib/pushRunner.js
+render-backend/lib/pushSessionManager.js
+render-backend/server.js
+```
+
+前端入口：
+
+```text
+src/views/PushingLevels.vue
+src/api/pushing.js
+```
+
+接口：
+
+```text
+POST /api/pushing/runs
+GET  /api/pushing/status
+GET  /api/pushing/runs/:id
+POST /api/pushing/runs/:id/stop
+POST /api/pushing/runs/:id/use-torch
+```
+
+完整规则见 [nas-auto-pushing.md](nas-auto-pushing.md)。
+
+## 6. 主线推关进度条显示
+
+状态：已记录，待优化。
+
+当前现象：
+
+- NAS 推图状态卡能显示“战斗剩余 Ns”，但进度条一直为空。
+- 浏览器模式进度条逻辑正常，问题只在 NAS 状态卡的数据模型。
+
+原因：
+
+- 前端 NAS 卡片把接口返回的 `account.battleTime` 同时赋给 `countdown` 和 `totalTime`。
+- 服务端每次轮询只保存当前剩余时间，没有单独保存本场初始时长或预计结束时间。
+- `progressPercent = 1 - countdown / totalTime` 因此长期接近 `0`。
+
+后续方案：
+
+1. 账号战斗开始时持久化 `battleDurationSeconds`。
+2. 同时保存 `battleStartedAt` 或 `battleEndsAt`。
+3. 状态 API 返回本场总时长和当前剩余时长。
+4. 前端使用真实总时长计算百分比，并在服务器重启恢复后按真实结束时间校正。
+5. 为进度 0%、中间值、完成和恢复场景补测试。
+
+## 7. 运行状态持久化
+
+当前跨周十殿状态已写入 `nightmare-runs.json`，NAS 推图会话已写入
+`pushing-runs.json`，两者都会在容器启动后检查并恢复。
+
+仍需补强：
+
 - 持久化维护等待。
 - 持久化手动租约。
-- 容器重启后自动恢复未完成任务。
+- 对普通定时任务尚在内存中的队列和执行状态做恢复设计。
 
-## 6. 事务与备份
+## 8. 事务与备份
 
 当前 NAS 本地 JSON/JSONL 是权威数据。
 
@@ -222,7 +292,7 @@ test/nightmareUi.test.js
 - 对写文件进行原子替换和校验。
 - 为账号、任务、设置和日志提供恢复演练。
 
-## 7. 镜像可追溯
+## 9. 镜像可追溯
 
 当前镜像可能只存在于构建机和 NAS 本地。
 
@@ -231,3 +301,11 @@ test/nightmareUi.test.js
 - 推送不可变镜像到用户可控制的 GHCR。
 - 记录源码 commit、构建时间和镜像 digest。
 - NAS 部署只引用已验证镜像。
+
+当前部署镜像：
+
+```text
+ghcr.io/l15035964899/xyzw-nas-all:05b2ab6-nas-pushing-20261127-r1
+```
+
+该镜像由提交前的同一工作区构建，功能内容对应 `1fb7ca6` 和 `792bcfc`。
