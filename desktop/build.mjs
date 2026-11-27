@@ -43,6 +43,11 @@ try {
       recursive: true,
     });
   }
+  await fs.mkdir(path.join(work, "render-backend/lib"), { recursive: true });
+  await fs.copyFile(
+    path.join(root, "render-backend/lib/weeklyStore.js"),
+    path.join(work, "render-backend/lib/weeklyStore.js"),
+  );
   await fs.symlink(
     path.join(root, "node_modules"),
     path.join(work, "node_modules"),
