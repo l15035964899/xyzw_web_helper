@@ -15,6 +15,7 @@ async function snapshot() {
     if (!stat) return;
     if (stat.isDirectory()) {
       for (const name of (await fs.readdir(full)).sort()) {
+        if (name === ".DS_Store") continue;
         await visit(path.join(relative, name));
       }
     } else if (stat.isFile()) {
