@@ -116,9 +116,28 @@ test("local store persists tokens, tasks and task logs", async (t) => {
     roomId: "room-a",
   });
   assert.equal(runState.phase, "paused-cross-week");
+  assert.equal((await store.getNightmareRunState(task.id)).roomId, "room-a");
+
+  await store.savePushingRunState({
+    runId: "push-run-a",
+    status: "running",
+    tokenIds: [token.id],
+    accounts: {
+      [token.id]: {
+        tokenId: token.id,
+        tokenName: token.name,
+        status: "fighting",
+        level: 1234,
+      },
+    },
+  });
   assert.equal(
-    (await store.getNightmareRunState(task.id)).roomId,
-    "room-a",
+    (await store.getPushingRunState("push-run-a")).accounts[token.id].level,
+    1234,
+  );
+  assert.equal(
+    (await fs.stat(path.join(directory, "pushing-runs.json"))).mode & 0o777,
+    0o600,
   );
 
   const reloaded = createLocalStore({ dataDir: directory });
@@ -129,6 +148,10 @@ test("local store persists tokens, tasks and task logs", async (t) => {
   assert.equal(
     (await reloaded.getNightmareRunState(task.id)).phase,
     "paused-cross-week",
+  );
+  assert.equal(
+    (await reloaded.getPushingRunState("push-run-a")).status,
+    "running",
   );
 });
 

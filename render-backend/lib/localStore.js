@@ -146,6 +146,7 @@ export function createLocalStore({ dataDir }) {
     "token-refresh-credentials.json",
   );
   const nightmareRunsFile = path.join(root, "nightmare-runs.json");
+  const pushingRunsFile = path.join(root, "pushing-runs.json");
   let writeQueue = Promise.resolve();
 
   async function readJson(file, fallback) {
@@ -509,6 +510,41 @@ export function createLocalStore({ dataDir }) {
     });
   }
 
+  async function listPushingRunStates() {
+    const values = await readJson(pushingRunsFile, {});
+    return values && typeof values === "object" ? values : {};
+  }
+
+  async function getPushingRunState(id) {
+    const values = await listPushingRunStates();
+    return values[String(id)] || null;
+  }
+
+  async function savePushingRunState(state = {}) {
+    return mutate(async () => {
+      const id = String(state.runId || state.id || "");
+      if (!id) throw new Error("推图运行状态缺少 runId");
+      const current = await listPushingRunStates();
+      current[id] = {
+        ...state,
+        runId: id,
+        updatedAt: state.updatedAt || new Date().toISOString(),
+      };
+      await writeJson(pushingRunsFile, current);
+      return current[id];
+    });
+  }
+
+  async function deletePushingRunState(id) {
+    return mutate(async () => {
+      const current = await listPushingRunStates();
+      if (!Object.hasOwn(current, String(id))) return false;
+      delete current[String(id)];
+      await writeJson(pushingRunsFile, current);
+      return true;
+    });
+  }
+
   return {
     kind: "local",
     root,
@@ -535,6 +571,10 @@ export function createLocalStore({ dataDir }) {
     getNightmareRunState,
     saveNightmareRunState,
     deleteNightmareRunState,
+    listPushingRunStates,
+    getPushingRunState,
+    savePushingRunState,
+    deletePushingRunState,
     appendTaskLog,
     appendTaskLogs,
     listTaskLogs,

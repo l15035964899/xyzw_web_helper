@@ -15,6 +15,7 @@ function createSupabaseStore(url, key) {
   let batchSettings = normalizeBatchSettings();
   let batchSettingsInitialized = false;
   const nightmareRunStates = {};
+  const pushingRunStates = {};
 
   async function listTokens({ enabledOnly = false } = {}) {
     let query = supabase.from("tokens").select("*").order("created_at");
@@ -184,6 +185,27 @@ function createSupabaseStore(url, key) {
     return true;
   }
 
+  async function listPushingRunStates() {
+    return { ...pushingRunStates };
+  }
+
+  async function getPushingRunState(id) {
+    return pushingRunStates[String(id)] || null;
+  }
+
+  async function savePushingRunState(state = {}) {
+    const id = String(state.runId || state.id || "");
+    if (!id) throw new Error("推图运行状态缺少 runId");
+    pushingRunStates[id] = { ...state, runId: id };
+    return pushingRunStates[id];
+  }
+
+  async function deletePushingRunState(id) {
+    if (!Object.hasOwn(pushingRunStates, String(id))) return false;
+    delete pushingRunStates[String(id)];
+    return true;
+  }
+
   return {
     kind: "supabase",
     init: async () => {},
@@ -204,6 +226,10 @@ function createSupabaseStore(url, key) {
     getNightmareRunState,
     saveNightmareRunState,
     deleteNightmareRunState,
+    listPushingRunStates,
+    getPushingRunState,
+    savePushingRunState,
+    deletePushingRunState,
     appendTaskLog,
     appendTaskLogs,
     listTaskLogs,

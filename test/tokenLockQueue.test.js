@@ -60,3 +60,24 @@ test("disjoint account sets do not wait for each other", async () => {
   first.release();
   second.release();
 });
+
+test("queued push acquisition can be aborted and is visible to wait observers", async () => {
+  const locks = new TokenLockQueue();
+  const first = await locks.acquireAll(["account-a"], "cron-task");
+  const controller = new AbortController();
+  const waiting = locks.acquire("account-a", "push-task", {
+    signal: controller.signal,
+  });
+  await Promise.resolve();
+
+  assert.equal(locks.hasWaitingTask("account-a"), true);
+  assert.deepEqual(locks.waitingTaskIds("account-a"), ["push-task"]);
+  assert.deepEqual(locks.waitingSnapshot(), {
+    "account-a": ["push-task"],
+  });
+
+  controller.abort();
+  await assert.rejects(waiting, /账号锁等待已取消/);
+  assert.equal(locks.hasWaitingTask("account-a"), false);
+  first.release();
+});

@@ -6,6 +6,10 @@
         <p>主线推图</p>
       </div>
       <div class="pl-header-actions">
+        <n-radio-group v-model:value="executionMode" size="small">
+          <n-radio value="nas">NAS 推图</n-radio>
+          <n-radio value="browser">浏览器</n-radio>
+        </n-radio-group>
         <n-switch v-model:value="autoContinue" size="small">
           <template #checked>自动继续</template>
           <template #unchecked>手动停止</template>
@@ -81,6 +85,46 @@
       <n-empty v-else description="暂无账号" size="small" />
     </n-card>
 
+    <n-card
+      v-if="executionMode === 'nas'"
+      class="nas-options-card"
+      :content-style="{ padding: '12px 16px' }"
+    >
+      <div class="nas-options-row">
+        <label class="nas-option">
+          <span>最大并发</span>
+          <n-input-number
+            v-model:value="nasMaxConcurrent"
+            :min="1"
+            :max="5"
+            :precision="0"
+            size="small"
+          />
+        </label>
+        <label class="nas-option">
+          <span>每 100 关升级挂机</span>
+          <n-switch v-model:value="autoUpgradeHangup" size="small" />
+        </label>
+        <label class="nas-option">
+          <span>被顶号后重登（分钟）</span>
+          <n-input-number
+            v-model:value="kickReloginDelayMinutes"
+            :min="0"
+            :max="120"
+            :precision="0"
+            size="small"
+          />
+        </label>
+        <n-tag v-if="activeNasRun" type="info" size="small">
+          会话 {{ activeNasRun.status }}
+        </n-tag>
+      </div>
+      <n-alert type="info" :bordered="false" class="nas-options-alert">
+        推图由 NAS
+        持续执行，关闭浏览器不会停止。自动任务需要任一推图账号时，所有当前战斗结算后暂停并释放账号锁，任务结束后自动恢复。手动停止会立即断开连接。
+      </n-alert>
+    </n-card>
+
     <!-- 操作区：火把配置 + 控制按钮（同行） -->
     <n-card class="control-card" :content-style="{ padding: '12px 16px' }">
       <div class="control-row">
@@ -106,16 +150,31 @@
         <n-button
           size="small"
           type="primary"
-          :disabled="!selectedTokenIds.length || !hasAnyRunning"
+          :disabled="!canUseTorch"
           :loading="torchRunning"
           @click="useTorchForSelected"
         >
           使用火把
         </n-button>
+        <n-popconfirm
+          v-if="executionMode === 'nas'"
+          positive-text="开始"
+          negative-text="取消"
+          @positive-click="startSelected"
+        >
+          <template #trigger>
+            <n-button type="primary" size="small" :disabled="!canStartSession">
+              开始 NAS 推图
+            </n-button>
+          </template>
+          推图会持续占用账号直到手动停止；自动任务出现时会让锁并在结束后恢复；每
+          100 关可能按配置消耗知识币；关闭浏览器不会停止。
+        </n-popconfirm>
         <n-button
+          v-else
           type="primary"
           size="small"
-          :disabled="!selectedTokenIds.length || allSelectedRunning"
+          :disabled="!canStartSession"
           @click="startSelected"
         >
           开始推图
@@ -123,24 +182,27 @@
         <n-button
           type="error"
           size="small"
-          :disabled="!hasSelectedRunning"
+          :disabled="
+            executionMode === 'nas' ? !activeNasRun : !hasSelectedRunning
+          "
           @click="stopSelected"
         >
-          全部停止
+          {{ executionMode === "nas" ? "强制停止 NAS" : "全部停止" }}
         </n-button>
         <div class="control-spacer"></div>
-        <span class="status-text"
-          >已选择 {{ selectedTokenIds.length }} 个账号，正在推图
-          {{ runningCount }} 个账号</span
-        >
+        <span class="status-text">
+          已选择 {{ selectedTokenIds.length }} 个账号，{{
+            executionMode === "nas" ? "NAS" : "浏览器"
+          }}正在推图 {{ runningCount }} 个账号
+        </span>
         <n-button size="small" @click="clearSelection">清除选择</n-button>
       </div>
     </n-card>
 
     <!-- 推图卡片区 -->
-    <div v-if="runningCards.length" class="running-section">
+    <div v-if="displayCards.length" class="running-section">
       <n-card
-        v-for="card in runningCards"
+        v-for="card in displayCards"
         :key="card.tokenId"
         class="running-card"
         :class="{ active: card.running }"
@@ -155,6 +217,9 @@
             ></span>
           </div>
           <n-space size="small">
+            <n-tag v-if="card.isNas" size="small" type="info">
+              {{ card.statusLabel }}
+            </n-tag>
             <n-tag size="small" type="success">{{ card.wins }}胜</n-tag>
             <n-tag size="small" type="error">{{ card.losses }}负</n-tag>
             <n-tag
@@ -188,22 +253,35 @@
             </div>
             <div class="card-actions">
               <span>已战斗 {{ card.battles }} 场</span>
-              <n-button size="tiny" type="error" @click="stopOne(card.tokenId)"
-                >停止</n-button
+              <n-button
+                size="tiny"
+                type="error"
+                @click="card.isNas ? stopActiveNasRun() : stopOne(card.tokenId)"
+                >{{ card.isNas ? "停止 NAS" : "停止" }}</n-button
               >
             </div>
           </template>
           <template v-else>
-            <div class="waiting-line">等待推图</div>
+            <div class="waiting-line">
+              {{ card.statusLabel || "等待推图" }}
+            </div>
             <div class="card-actions">
               <span class="err-text" :title="card.lastError || '无'">
                 最近错误：{{ card.lastError || "无" }}
               </span>
               <n-button
+                v-if="!card.isNas"
                 size="tiny"
                 type="primary"
                 @click="startOne(card.tokenId)"
                 >启动</n-button
+              >
+              <n-button
+                v-else-if="activeNasRun"
+                size="tiny"
+                type="error"
+                @click="stopActiveNasRun()"
+                >停止会话</n-button
               >
             </div>
           </template>
@@ -217,7 +295,9 @@
         <div class="log-header">
           <div>
             推图日志
-            <n-tag size="small">{{ logs.length }}/2000 条</n-tag>
+            <n-tag size="small"
+              >{{ sourceLogs.length }}/{{ maxLogCount }} 条</n-tag
+            >
           </div>
           <div class="log-actions">
             <n-checkbox v-model:checked="autoScroll" size="small"
@@ -281,10 +361,22 @@ import {
   ref,
   watch,
 } from "vue";
+import {
+  loadPushingLogs,
+  loadPushingStatus,
+  startPushingRun,
+  stopPushingRun,
+  usePushingTorch,
+} from "@/api/pushing";
 import { useTokenStore } from "@/stores/tokenStore";
+import {
+  ensureNasTokensHydrated,
+  readNasTokenIdMap,
+} from "@/utils/nasTokenBootstrap";
 import { BOSS_NAMES } from "./boss_names.js";
 
 const MAX_LOGS = 2000;
+const maxLogCount = MAX_LOGS;
 const KNOWLEDGE_COIN_ITEM_ID = 1024;
 // 火把信息刷新间隔（毫秒）
 const TORCH_REFRESH_INTERVAL = 30000;
@@ -292,6 +384,7 @@ const TORCH_REFRESH_INTERVAL = 30000;
 const message = useMessage();
 const tokenStore = useTokenStore();
 
+const executionMode = ref(localStorage.getItem("push-execution-mode") || "nas");
 const selectedTokenIds = ref([]);
 const selectedGroupIds = ref([]);
 const searchKeyword = ref("");
@@ -302,6 +395,12 @@ const onlyErrors = ref(false);
 const logsContainer = ref(null);
 const logs = ref([]);
 const runningStates = reactive({});
+const nasStatus = ref({ runs: [], activeRun: null });
+const nasTokenIdMap = ref(readNasTokenIdMap());
+const nasLogs = ref([]);
+const nasMaxConcurrent = ref(5);
+const autoUpgradeHangup = ref(true);
+const kickReloginDelayMinutes = ref(5);
 const torchRunning = ref(false);
 const torchItemId = ref(1008);
 const torchQuantity = ref(150);
@@ -309,6 +408,8 @@ const logFilterTokenId = ref(null);
 // 倒计时刷新（用于火把时间），每秒更新一次显示
 const tickNow = ref(Date.now());
 let tickTimer = null;
+let nasPollTimer = null;
+let nasRefreshRunning = false;
 
 const torchOptions = [
   { label: "木材火把", value: 1008 },
@@ -318,6 +419,24 @@ const torchOptions = [
 
 const tokens = computed(() => tokenStore.gameTokens || []);
 const tokenGroups = computed(() => tokenStore.tokenGroups || []);
+const activeNasRun = computed(() => {
+  if (nasStatus.value.activeRun) return nasStatus.value.activeRun;
+  return (
+    (nasStatus.value.runs || []).find((run) =>
+      [
+        "queued",
+        "running",
+        "waiting-scheduled-task",
+        "waiting-relogin",
+        "waiting-manual-torch",
+        "paused",
+      ].includes(run.status),
+    ) || null
+  );
+});
+const sourceLogs = computed(() =>
+  executionMode.value === "nas" ? nasLogs.value : logs.value,
+);
 
 const filteredTokens = computed(() => {
   const keyword = searchKeyword.value.trim().toLowerCase();
@@ -340,6 +459,11 @@ const filteredTokens = computed(() => {
 });
 
 const runningCount = computed(() => {
+  if (executionMode.value === "nas") {
+    return Object.values(activeNasRun.value?.accounts || {}).filter(
+      (account) => !["paused", "failed", "stopped"].includes(account.status),
+    ).length;
+  }
   return Object.values(runningStates).filter(
     (state) => state?.running && !state.stopFlag,
   ).length;
@@ -374,9 +498,56 @@ const hasSelectedRunning = computed(() => {
 });
 
 const hasAnyRunning = computed(() => {
+  if (executionMode.value === "nas") return Boolean(activeNasRun.value);
   return Object.values(runningStates).some(
     (state) => state?.running && !state.stopFlag,
   );
+});
+
+const PUSH_ACCOUNT_STATUS_LABELS = {
+  queued: "排队中",
+  connecting: "连接中",
+  idle: "准备战斗",
+  calculating: "计算战斗时间",
+  fighting: "战斗中",
+  settling: "结算中",
+  waiting: "等待",
+  "waiting-scheduled-task": "让位自动任务",
+  "waiting-relogin": "等待重新登录",
+  "waiting-manual-torch": "等待使用火把",
+  paused: "已暂停",
+  stopped: "已停止",
+  failed: "失败",
+};
+
+function getPushAccountStatusLabel(status) {
+  return PUSH_ACCOUNT_STATUS_LABELS[status] || status || "等待推图";
+}
+
+const selectedNasTokenIds = computed(() =>
+  selectedTokenIds.value
+    .map((tokenId) => getNasTokenId(tokenId))
+    .filter(Boolean),
+);
+
+const canStartSession = computed(() => {
+  if (selectedTokenIds.value.length === 0) return false;
+  if (executionMode.value === "nas") {
+    return !activeNasRun.value;
+  }
+  return !allSelectedRunning.value;
+});
+
+const canUseTorch = computed(() => {
+  if (selectedTokenIds.value.length === 0) return false;
+  if (executionMode.value === "nas") {
+    if (!activeNasRun.value) return false;
+    const runAccounts = new Set(activeNasRun.value.tokenIds || []);
+    return selectedNasTokenIds.value.some((tokenId) =>
+      runAccounts.has(tokenId),
+    );
+  }
+  return hasAnyRunning.value;
 });
 
 function getTorchLabel(state) {
@@ -387,6 +558,14 @@ function getTorchLabel(state) {
     return `${name} ${formatTorchTime(remaining)}`;
   }
   return "火把 无";
+}
+
+function getNasTorchLabel(account) {
+  if (!account?.torchType || Number(account.torchRemaining) <= 0) {
+    return "火把 无";
+  }
+  const name = getTorchName(account.torchType);
+  return `${name} ${formatTorchTime(account.torchRemaining)}`;
 }
 
 const runningCards = computed(() => {
@@ -423,8 +602,50 @@ const runningCards = computed(() => {
     });
 });
 
+const nasCards = computed(() => {
+  const run = activeNasRun.value;
+  if (!run) return [];
+  return Object.values(run.accounts || {}).map((account) => {
+    const localTokenId = localTokenIdForNas(account.tokenId);
+    const token = localTokenId ? getToken(localTokenId) : null;
+    const level = Number(account.level || 0);
+    return {
+      tokenId: localTokenId || account.tokenId,
+      nasTokenId: account.tokenId,
+      tokenName: token?.name || account.tokenName || account.tokenId,
+      isNas: true,
+      running: [
+        "idle",
+        "connecting",
+        "calculating",
+        "fighting",
+        "settling",
+      ].includes(account.status),
+      level,
+      bossName:
+        account.bossName && Number(account.level || 0) === level
+          ? account.bossName
+          : getBossName(level),
+      wins: account.wins || 0,
+      losses: account.losses || 0,
+      battles: account.battles || 0,
+      retries: account.retries || 0,
+      countdown: account.battleTime || 0,
+      totalTime: account.battleTime || 0,
+      lastError: account.lastError || "",
+      torchLabel: getNasTorchLabel(account),
+      statusLabel: getPushAccountStatusLabel(account.status),
+      reloginAt: account.reloginAt,
+    };
+  });
+});
+
+const displayCards = computed(() =>
+  executionMode.value === "nas" ? nasCards.value : runningCards.value,
+);
+
 const visibleLogs = computed(() => {
-  let list = logs.value;
+  let list = sourceLogs.value;
   if (logFilterTokenId.value) {
     list = list.filter((log) => log.tokenId === logFilterTokenId.value);
   }
@@ -436,7 +657,7 @@ const visibleLogs = computed(() => {
 
 const logFilterOptions = computed(() => {
   const map = new Map();
-  logs.value.forEach((log) => {
+  sourceLogs.value.forEach((log) => {
     if (!map.has(log.tokenId)) {
       map.set(log.tokenId, { label: log.tokenName, value: log.tokenId });
     }
@@ -473,6 +694,27 @@ function getToken(tokenId) {
   return tokens.value.find((token) => token.id === tokenId);
 }
 
+function getNasTokenId(localTokenId) {
+  const token = getToken(localTokenId);
+  return token?.serverAccountId || nasTokenIdMap.value[localTokenId] || null;
+}
+
+function localTokenIdForNas(nasTokenId) {
+  const direct = tokens.value.find(
+    (token) =>
+      token.serverAccountId === nasTokenId ||
+      nasTokenIdMap.value[token.id] === nasTokenId,
+  );
+  return direct?.id || null;
+}
+
+function getNasAccount(localTokenId) {
+  const direct = activeNasRun.value?.accounts?.[localTokenId];
+  if (direct) return direct;
+  const nasTokenId = getNasTokenId(localTokenId);
+  return nasTokenId ? activeNasRun.value?.accounts?.[nasTokenId] || null : null;
+}
+
 function getTokenName(tokenId) {
   return getToken(tokenId)?.name || tokenId;
 }
@@ -491,6 +733,23 @@ function isRunning(tokenId) {
 }
 
 function getStatusClass(tokenId) {
+  if (executionMode.value === "nas") {
+    const status = getNasAccount(tokenId)?.status;
+    if (["idle", "connecting"].includes(status)) return "status-blue";
+    if (["calculating", "fighting", "settling"].includes(status)) {
+      return "status-green";
+    }
+    if (
+      ["waiting-scheduled-task", "waiting-manual-torch", "waiting"].includes(
+        status,
+      )
+    ) {
+      return "status-yellow";
+    }
+    if (status === "waiting-relogin") return "status-yellow";
+    if (["paused", "failed"].includes(status)) return "status-red";
+    return "status-gray";
+  }
   const status = getWebSocketStatus(tokenId);
   if (status === "connected") return "status-green";
   if (status === "connecting") return "status-blue";
@@ -499,6 +758,14 @@ function getStatusClass(tokenId) {
 }
 
 function getStatusTitle(tokenId) {
+  if (executionMode.value === "nas") {
+    const account = getNasAccount(tokenId);
+    return account
+      ? getPushAccountStatusLabel(account.status)
+      : activeNasRun.value
+        ? "未加入当前 NAS 推图会话"
+        : "NAS 推图未运行";
+  }
   const status = getWebSocketStatus(tokenId);
   const map = {
     connected: "已连接",
@@ -621,6 +888,11 @@ function addLog(tokenId, tokenName, msg, type = "info") {
 }
 
 function clearLogs() {
+  if (executionMode.value === "nas") {
+    nasLogs.value = [];
+    void refreshNasLogs();
+    return;
+  }
   logs.value = [];
 }
 
@@ -1175,6 +1447,10 @@ async function runOneBattle(tokenId, tokenName) {
 
 async function startOne(tokenId) {
   const tokenName = getTokenName(tokenId);
+  if (executionMode.value === "browser" && isAccountInActiveNasRun(tokenId)) {
+    message.warning(`${tokenName} 正在 NAS 推图中，请先停止 NAS 会话`);
+    return;
+  }
   if (isRunning(tokenId)) {
     addLog(tokenId, tokenName, "该账号已在推图中", "warning");
     return;
@@ -1294,11 +1570,63 @@ async function startOne(tokenId) {
 }
 
 async function startSelected() {
+  if (executionMode.value === "nas") {
+    await startNasSelected();
+    return;
+  }
+  const conflicting = selectedTokenIds.value.filter((tokenId) =>
+    isAccountInActiveNasRun(tokenId),
+  );
+  if (conflicting.length > 0) {
+    message.warning(
+      `以下账号正在 NAS 推图中：${conflicting.map(getTokenName).join("、")}`,
+    );
+    return;
+  }
   for (const tokenId of selectedTokenIds.value) {
     if (!isRunning(tokenId)) {
       startOne(tokenId);
       await sleep(2000);
     }
+  }
+}
+
+function isAccountInActiveNasRun(localTokenId) {
+  const nasTokenId = getNasTokenId(localTokenId);
+  return Boolean(
+    nasTokenId && activeNasRun.value?.tokenIds?.includes(nasTokenId),
+  );
+}
+
+async function startNasSelected() {
+  const nasIds = [];
+  const missing = [];
+  for (const tokenId of selectedTokenIds.value) {
+    const nasTokenId = getNasTokenId(tokenId);
+    if (nasTokenId) nasIds.push(nasTokenId);
+    else missing.push(getTokenName(tokenId));
+  }
+  if (missing.length > 0) {
+    message.warning(`以下账号尚未同步到 NAS：${missing.join("、")}`);
+    return;
+  }
+  if (nasIds.length === 0) return;
+
+  try {
+    const run = await startPushingRun({
+      tokenIds: nasIds,
+      options: {
+        maxConcurrent: nasMaxConcurrent.value,
+        maxRetries: maxRetries.value,
+        autoContinue: autoContinue.value,
+        autoUpgradeHangup: autoUpgradeHangup.value,
+        kickReloginDelayMinutes: kickReloginDelayMinutes.value,
+      },
+    });
+    message.success(`NAS 推图已启动：${run.runId.slice(0, 8)}`);
+    await refreshNasStatus();
+  } catch (error) {
+    message.error(`启动 NAS 推图失败：${error.message}`);
   }
 }
 
@@ -1315,9 +1643,25 @@ function stopOne(tokenId) {
 }
 
 function stopSelected() {
+  if (executionMode.value === "nas") {
+    void stopActiveNasRun();
+    return;
+  }
   selectedTokenIds.value.forEach((tokenId) => {
     if (isRunning(tokenId)) stopOne(tokenId);
   });
+}
+
+async function stopActiveNasRun() {
+  const run = activeNasRun.value;
+  if (!run) return;
+  try {
+    await stopPushingRun(run.runId, { reason: "用户从主线推关页面强制停止" });
+    message.success("NAS 推图已强制停止并释放账号锁");
+    await refreshNasStatus();
+  } catch (error) {
+    message.error(`停止 NAS 推图失败：${error.message}`);
+  }
 }
 
 async function useTorchForSelected() {
@@ -1327,6 +1671,38 @@ async function useTorchForSelected() {
   const itemName = option?.label || `#${torchItemId.value}`;
   const quantity = torchQuantity.value || 1;
   torchRunning.value = true;
+
+  if (executionMode.value === "nas") {
+    const run = activeNasRun.value;
+    if (!run) {
+      torchRunning.value = false;
+      message.warning("当前没有运行中的 NAS 推图会话");
+      return;
+    }
+    const runAccounts = new Set(run.tokenIds || []);
+    const tokenIds = selectedNasTokenIds.value.filter((tokenId) =>
+      runAccounts.has(tokenId),
+    );
+    if (tokenIds.length === 0) {
+      torchRunning.value = false;
+      message.warning("所选账号不在当前 NAS 推图会话中");
+      return;
+    }
+    try {
+      await usePushingTorch(run.runId, {
+        tokenIds,
+        itemId: torchItemId.value,
+        quantity,
+      });
+      message.info("火把操作已排队，将在当前战斗结算后执行");
+      await refreshNasStatus();
+    } catch (error) {
+      message.error(`NAS 使用火把失败：${error.message}`);
+    } finally {
+      torchRunning.value = false;
+    }
+    return;
+  }
 
   let successCount = 0;
   let failCount = 0;
@@ -1396,16 +1772,97 @@ async function useTorchForSelected() {
   );
 }
 
+async function refreshNasStatus() {
+  if (nasRefreshRunning) return;
+  nasRefreshRunning = true;
+  try {
+    nasStatus.value = await loadPushingStatus();
+    const run = activeNasRun.value || nasStatus.value.runs?.[0] || null;
+    if (run?.runId) await refreshNasLogs(run.runId);
+    else nasLogs.value = [];
+  } finally {
+    nasRefreshRunning = false;
+  }
+}
+
+async function refreshNasLogs(runId = activeNasRun.value?.runId) {
+  if (!runId) {
+    nasLogs.value = [];
+    return;
+  }
+  try {
+    const entries = await loadPushingLogs(runId, { limit: MAX_LOGS });
+    nasLogs.value = (Array.isArray(entries) ? entries : [])
+      .slice()
+      .reverse()
+      .map((entry) => {
+        const nasTokenId = entry.token_id ? String(entry.token_id) : null;
+        const localId = nasTokenId
+          ? localTokenIdForNas(nasTokenId) || nasTokenId
+          : null;
+        return {
+          time: new Date(entry.created_at).toLocaleTimeString(),
+          tokenId: localId,
+          tokenName:
+            entry.token_name || (localId ? getTokenName(localId) : "NAS"),
+          msg: entry.message || "",
+          type:
+            entry.level === "warn"
+              ? "warning"
+              : entry.level || entry.status || "info",
+        };
+      });
+  } catch {
+    // A transient log fetch failure should not hide the authoritative status.
+  }
+}
+
+watch(executionMode, (mode) => {
+  localStorage.setItem("push-execution-mode", mode);
+  if (mode === "nas") void refreshNasStatus();
+});
+
 onMounted(() => {
   tickTimer = setInterval(() => {
     tickNow.value = Date.now();
   }, 1000);
+  void (async () => {
+    try {
+      const hydration = await ensureNasTokensHydrated(tokenStore);
+      nasTokenIdMap.value = hydration?.tokenIdMap || readNasTokenIdMap();
+    } catch (error) {
+      addLog(
+        "nas",
+        "NAS",
+        `同步 NAS 账号失败：${sanitizeError(error)}`,
+        "warning",
+      );
+      message.warning(`同步 NAS 账号失败：${sanitizeError(error)}`);
+    }
+    await refreshNasStatus().catch((error) => {
+      addLog(
+        "nas",
+        "NAS",
+        `读取 NAS 推图状态失败：${sanitizeError(error)}`,
+        "warning",
+      );
+    });
+    nasPollTimer = setInterval(() => {
+      if (executionMode.value === "nas") {
+        void refreshNasStatus().catch(() => {});
+      }
+    }, 2000);
+  })();
 });
 
 onBeforeUnmount(() => {
   if (tickTimer) {
     clearInterval(tickTimer);
     tickTimer = null;
+  }
+  if (nasPollTimer) {
+    clearInterval(nasPollTimer);
+    nasPollTimer = null;
   }
   Object.values(runningStates).forEach((state) => {
     if (state?.running) {
@@ -1470,6 +1927,7 @@ onBeforeUnmount(() => {
 }
 
 .account-card-top,
+.nas-options-card,
 .control-card,
 .log-card,
 .running-card {
@@ -1481,6 +1939,29 @@ onBeforeUnmount(() => {
   flex-direction: column;
   gap: 8px;
   padding: 10px 14px;
+}
+
+.nas-options-row {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  flex-wrap: wrap;
+}
+
+.nas-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #475467;
+  font-size: 13px;
+}
+
+.nas-option :deep(.n-input-number) {
+  width: 92px;
+}
+
+.nas-options-alert {
+  margin-top: 10px;
 }
 
 .search-input {
@@ -1608,6 +2089,11 @@ onBeforeUnmount(() => {
   background: #2e90fa;
   box-shadow: 0 0 0 3px rgba(46, 144, 250, 0.2);
   animation: pulse 1.2s ease-in-out infinite;
+}
+
+.status-yellow {
+  background: #f79009;
+  box-shadow: 0 0 0 3px rgba(247, 144, 9, 0.16);
 }
 
 @keyframes pulse {

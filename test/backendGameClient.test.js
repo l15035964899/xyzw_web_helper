@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { loadModule } from "./helpers/loadModule.js";
 
@@ -123,4 +124,19 @@ test("card claims include the browser-compatible default card id", async () => {
   assert.equal(JSON.stringify(sent[1].body), JSON.stringify({ cardId: 4003 }));
   release(2);
   await permanentCardClaim;
+});
+
+test("NAS push protocol registers calculation, settlement, upgrade and item responses", async () => {
+  const source = await readFile(
+    new URL("../render-backend/lib/gameClient.js", import.meta.url),
+    "utf8",
+  );
+  assert.match(source, /fight_calcleveltime: \{\}/);
+  assert.match(source, /fight_level: \{\}/);
+  assert.match(source, /system_hangupupgrade: \{ upgradeNum: 1 \}/);
+  assert.match(source, /item_consume: \{ itemId: 1008, quantity: 1 \}/);
+  assert.match(source, /fight_calcleveltimeresp: "fight_calcleveltime"/);
+  assert.match(source, /fight_levelresp: "fight_level"/);
+  assert.match(source, /system_hangupupgraderesp: "system_hangupupgrade"/);
+  assert.match(source, /item_consumeresp: "item_consume"/);
 });

@@ -50,6 +50,7 @@ import {
   validateNightmareSettings,
   validateNightmareTeam,
 } from "./lib/nightmareSettings.js";
+import { PushSessionManager } from "./lib/pushSessionManager.js";
 import {
   expectedRoleIdFromToken,
   findDuplicateExpectedRoles,
@@ -890,6 +891,30 @@ const tokenRefreshManager = createTokenRefreshManager({
   dataStore,
   addLog,
   verifyRefreshedToken: verifyRefreshedGameToken,
+});
+const pushSessionManager = new PushSessionManager({
+  dataStore,
+  lockQueue: tokenLockQueue,
+  tokenRefreshManager,
+  createClient: gameClientForToken,
+  repairToken: repairTokenIdentityFromCredential,
+  log: async ({ level, taskType, tokenId, tokenName, message, runId }) => {
+    const safeMessage = sanitizeLogMessage(message);
+    addLog(
+      level === "error" ? "ERROR" : level === "warning" ? "WARN" : "INFO",
+      "pushing",
+      safeMessage,
+      { tokenId, runId },
+    );
+    await logToDb(
+      null,
+      tokenName,
+      taskType || "pushingSession",
+      level,
+      safeMessage,
+      { runId, tokenId, source: "nas-pushing", level },
+    );
+  },
 });
 
 async function executeTask(task, { source = "nas", retryAttempt = 0 } = {}) {
@@ -2067,6 +2092,7 @@ async function init() {
   );
 
   await dataStore.init();
+  await pushSessionManager.restore();
   await schedulePausedNightmareResumes();
   await registerAllCrons();
 
@@ -2654,6 +2680,7 @@ app.get("/api/tasks/runtime", (req, res) => {
   res.json({
     runningTaskIds: [...runningTasks],
     manualLeases: manualLeaseManager.list(),
+    pushing: pushSessionManager.status(),
     accountLocks: Object.entries(lockHolders).map(([tokenId, holder]) => ({
       token_id: tokenId,
       holder,
@@ -2683,6 +2710,58 @@ app.post("/api/manual-leases", async (req, res) => {
     res.json(lease);
   } catch (error) {
     res.status(400).json({ error: error.message });
+  }
+});
+
+app.post("/api/pushing/runs", async (req, res) => {
+  try {
+    const state = await pushSessionManager.start({
+      tokenIds: Array.isArray(req.body?.token_ids)
+        ? req.body.token_ids
+        : req.body?.tokenIds,
+      options: req.body?.options,
+      requestedBy: req.body?.requested_by || req.body?.requestedBy,
+    });
+    res.status(202).json(state);
+  } catch (error) {
+    res.status(error.statusCode || 400).json({ error: error.message });
+  }
+});
+
+app.get("/api/pushing/status", (req, res) => {
+  res.json(pushSessionManager.status());
+});
+
+app.get("/api/pushing/runs/:id", (req, res) => {
+  const state = pushSessionManager.get(req.params.id);
+  if (!state) return res.status(404).json({ error: "推图会话不存在" });
+  res.json(state);
+});
+
+app.post("/api/pushing/runs/:id/stop", async (req, res) => {
+  try {
+    const state = await pushSessionManager.stop(
+      req.params.id,
+      req.body?.reason,
+    );
+    res.json(state);
+  } catch (error) {
+    res.status(error.statusCode || 400).json({ error: error.message });
+  }
+});
+
+app.post("/api/pushing/runs/:id/use-torch", async (req, res) => {
+  try {
+    const result = await pushSessionManager.requestTorch(req.params.id, {
+      tokenIds: Array.isArray(req.body?.token_ids)
+        ? req.body.token_ids
+        : req.body?.tokenIds,
+      itemId: req.body?.item_id ?? req.body?.itemId,
+      quantity: req.body?.quantity,
+    });
+    res.status(202).json(result);
+  } catch (error) {
+    res.status(error.statusCode || 400).json({ error: error.message });
   }
 });
 
@@ -3078,6 +3157,24 @@ if (fs.existsSync(frontendIndex)) {
 }
 
 const PORT = process.env.PORT || 3000;
+let shuttingDown = false;
+async function shutdownPushCheckpoint(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  addLog("INFO", "server", `收到 ${signal}，保存 NAS 推图状态后退出`);
+  try {
+    await pushSessionManager.checkpoint();
+  } finally {
+    process.exit(0);
+  }
+}
+process.once("SIGTERM", () => {
+  void shutdownPushCheckpoint("SIGTERM");
+});
+process.once("SIGINT", () => {
+  void shutdownPushCheckpoint("SIGINT");
+});
+
 init()
   .then(() => {
     app.listen(PORT, () => {
