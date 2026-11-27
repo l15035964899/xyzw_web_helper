@@ -1,7 +1,4 @@
-import {
-  loadServerConnection,
-  serverRequest,
-} from "@/api/serverTasks";
+import { loadServerConnection, serverRequest } from "@/api/serverTasks";
 
 export function requestBatchServer(path, options = {}) {
   return serverRequest(path, {
@@ -45,9 +42,36 @@ export function serverTaskToUi(task = {}) {
   const cronExpression =
     task.cron_expr || task.cron_expression || task.cron || "0 8 * * *";
   const inferredDaily = inferDailyRun(cronExpression);
+  const selectedTasks = normalizeArray(task.selected_tasks || task.task_type);
+  const savedCharmLayers = Array.isArray(task.options?.charmLayers)
+    ? task.options.charmLayers
+        .map(Number)
+        .filter((layer) => Number.isInteger(layer) && layer >= 1 && layer <= 6)
+    : null;
+  const savedCharmTargets =
+    task.options?.charmTargets &&
+    typeof task.options.charmTargets === "object" &&
+    !Array.isArray(task.options.charmTargets)
+      ? task.options.charmTargets
+      : null;
+  const charmLayers =
+    savedCharmLayers ||
+    (savedCharmTargets
+      ? Object.keys(savedCharmTargets)
+          .map(Number)
+          .filter((layer) => layer >= 1 && layer <= 6)
+      : [1, 2, 3, 4, 5, 6]);
+  const charmTargets = Object.fromEntries(
+    [1, 2, 3, 4, 5, 6].map((layer) => [
+      layer,
+      Math.max(
+        1,
+        Math.min(50, Math.trunc(Number(savedCharmTargets?.[layer]) || 1)),
+      ),
+    ]),
+  );
   const runType =
-    task.schedule_type === "daily" ||
-    (!task.schedule_type && inferredDaily)
+    task.schedule_type === "daily" || (!task.schedule_type && inferredDaily)
       ? "daily"
       : "cron";
   return {
@@ -56,17 +80,22 @@ export function serverTaskToUi(task = {}) {
     legacyId: task.legacy_id || null,
     name: task.name || "未命名任务",
     runType,
-    runTime:
-      task.run_time || (runType === "daily" ? inferredDaily : undefined),
+    runTime: task.run_time || (runType === "daily" ? inferredDaily : undefined),
     cronExpression: runType === "cron" ? cronExpression : "",
     selectedTokens: normalizeArray(task.selected_tokens || task.token_ids),
-    selectedTasks: normalizeArray(
-      task.selected_tasks || task.task_type,
-    ),
+    selectedTasks,
     legionApplyTargetId: Number(task.options?.legionId || 0) || null,
     nightmareTeamId: task.options?.nightmareTeamId || null,
+    charmLayers,
+    charmTargets,
+    arenaTicketCount: Math.max(
+      1,
+      Math.min(100, Math.trunc(Number(task.options?.arenaTicketCount) || 100)),
+    ),
     serverOptions:
-      task.options && typeof task.options === "object" ? { ...task.options } : {},
+      task.options && typeof task.options === "object"
+        ? { ...task.options }
+        : {},
     enabled: Boolean(task.enabled),
     lastRunAt: task.last_run_at || null,
     nextRunAt: task.next_run_at || null,
@@ -91,6 +120,37 @@ export function uiTaskToServer(task, { existingOptions = {} } = {}) {
     } else {
       delete options.nightmareTeamId;
     }
+  }
+  if (task.selectedTasks?.includes("nightmareCharmPurchase")) {
+    options.charmLayers = [
+      ...new Set(
+        (task.charmLayers || [])
+          .map(Number)
+          .filter(
+            (layer) => Number.isInteger(layer) && layer >= 1 && layer <= 6,
+          ),
+      ),
+    ].sort((left, right) => left - right);
+    options.charmTargets = Object.fromEntries(
+      options.charmLayers.map((layer) => [
+        layer,
+        Math.max(
+          1,
+          Math.min(50, Math.trunc(Number(task.charmTargets?.[layer]) || 1)),
+        ),
+      ]),
+    );
+  } else {
+    delete options.charmLayers;
+    delete options.charmTargets;
+  }
+  if (task.selectedTasks?.includes("batchArenaClearTickets")) {
+    options.arenaTicketCount = Math.max(
+      1,
+      Math.min(100, Math.trunc(Number(task.arenaTicketCount) || 100)),
+    );
+  } else {
+    delete options.arenaTicketCount;
   }
 
   return {
@@ -142,20 +202,14 @@ export async function setServerScheduleEnabled(
   enabled,
   request = requestBatchServer,
 ) {
-  const [saved] = await request(
-    `/api/tasks/${encodeURIComponent(taskId)}`,
-    {
-      method: "PATCH",
-      body: { enabled: Boolean(enabled) },
-    },
-  );
+  const [saved] = await request(`/api/tasks/${encodeURIComponent(taskId)}`, {
+    method: "PATCH",
+    body: { enabled: Boolean(enabled) },
+  });
   return saved;
 }
 
-export async function runServerSchedule(
-  taskId,
-  request = requestBatchServer,
-) {
+export async function runServerSchedule(taskId, request = requestBatchServer) {
   return request(`/api/tasks/${encodeURIComponent(taskId)}/run`, {
     method: "POST",
     body: {},
@@ -172,9 +226,7 @@ export async function previewServerCron(
   });
 }
 
-export async function loadServerBatchSettings(
-  request = requestBatchServer,
-) {
+export async function loadServerBatchSettings(request = requestBatchServer) {
   return request("/api/batch-settings");
 }
 
@@ -188,9 +240,7 @@ export async function saveServerBatchSettings(
   });
 }
 
-export async function loadServerTaskRuntime(
-  request = requestBatchServer,
-) {
+export async function loadServerTaskRuntime(request = requestBatchServer) {
   return request("/api/tasks/runtime");
 }
 

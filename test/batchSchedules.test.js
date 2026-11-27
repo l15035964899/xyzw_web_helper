@@ -40,3 +40,45 @@ test("daily time conversion rejects out-of-range values", () => {
   assert.equal(module.dailyTimeToCron("06:10"), "10 6 * * *");
   assert.throws(() => module.dailyTimeToCron("24:00"), /范围/);
 });
+
+test("task-specific charm layers and arena ticket count round-trip independently", () => {
+  const ui = module.serverTaskToUi({
+    id: "task-b",
+    name: "抢符和清票",
+    cron_expr: "0 12 * * *",
+    selected_tasks: ["nightmareCharmPurchase", "batchArenaClearTickets"],
+    selected_tokens: ["account-a"],
+    options: {
+      charmLayers: [2, 6],
+      charmTargets: { 2: 2, 6: 3 },
+      arenaTicketCount: 75,
+    },
+  });
+
+  assert.deepEqual(ui.charmLayers, [2, 6]);
+  assert.equal(
+    JSON.stringify(ui.charmTargets),
+    JSON.stringify({
+      1: 1,
+      2: 2,
+      3: 1,
+      4: 1,
+      5: 1,
+      6: 3,
+    }),
+  );
+  assert.equal(ui.arenaTicketCount, 75);
+
+  const body = module.uiTaskToServer({
+    ...ui,
+    charmLayers: [5],
+    charmTargets: { 5: null },
+    arenaTicketCount: 500,
+  });
+  assert.equal(JSON.stringify(body.options.charmLayers), JSON.stringify([5]));
+  assert.equal(
+    JSON.stringify(body.options.charmTargets),
+    JSON.stringify({ 5: 1 }),
+  );
+  assert.equal(body.options.arenaTicketCount, 100);
+});

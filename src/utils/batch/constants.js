@@ -54,6 +54,7 @@ export const availableTasks = [
   { label: "领取营地任务奖励", value: "batchCampClaimTasks" },
   { label: "批量申请俱乐部", value: "batchApplyLegion" },
   { label: "一键竞技场战斗3次", value: "batcharenafight" },
+  { label: "竞技场清票", value: "batchArenaClearTickets" },
   { label: "一键钓鱼补齐", value: "batchTopUpFish" },
   { label: "一键竞技场补齐", value: "batchTopUpArena" },
   { label: "一键领取怪异塔免费道具", value: "batchClaimFreeEnergy" },
@@ -184,6 +185,9 @@ export const defaultTaskForm = {
   selectedTasks: [],
   legionApplyTargetId: null,
   nightmareTeamId: null,
+  charmLayers: [1, 2, 3, 4, 5, 6],
+  charmTargets: { 1: 1, 2: 1, 3: 1, 4: 1, 5: 1, 6: 1 },
+  arenaTicketCount: 100,
   enabled: true,
 };
 

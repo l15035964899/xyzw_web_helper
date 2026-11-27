@@ -39,7 +39,11 @@
                 </template>
                 设置
               </n-button>
-              <n-button type="warning" size="medium" @click="openNightmareConfig">
+              <n-button
+                type="warning"
+                size="medium"
+                @click="openNightmareConfig"
+              >
                 十殿配置
               </n-button>
             </div>
@@ -351,6 +355,13 @@
                   "
                 >
                   一键竞技场战斗3次
+                </n-button>
+                <n-button
+                  size="small"
+                  @click="showArenaClearModal = true"
+                  :disabled="isRunning || selectedTokens.length === 0"
+                >
+                  竞技场清票
                 </n-button>
                 <n-button
                   size="small"
@@ -2231,6 +2242,60 @@
               打开十殿配置
             </n-button>
           </div>
+          <div
+            v-if="taskForm.selectedTasks.includes('batchArenaClearTickets')"
+            class="setting-item"
+          >
+            <label class="setting-label">竞技场清票最多执行次数</label>
+            <n-input-number
+              v-model:value="taskForm.arenaTicketCount"
+              :min="1"
+              :max="100"
+              :precision="0"
+              style="width: 180px"
+            />
+            <div style="font-size: 12px; color: #86909c">
+              每个定时任务独立保存。实际次数不超过当前咸神门票；无论胜负或单场异常都会继续，单次最多
+              100 次。竞技场仅在上海时间 06:00-22:00
+              开放，其他时间会记录日志并跳过。
+            </div>
+          </div>
+          <div
+            v-if="taskForm.selectedTasks.includes('nightmareCharmPurchase')"
+            class="setting-item"
+          >
+            <label class="setting-label">抢符咒层级与目标数量</label>
+            <div class="charm-layer-grid">
+              <div
+                v-for="layer in charmLayerOptions"
+                :key="layer.value"
+                class="charm-layer-row"
+              >
+                <n-checkbox
+                  :checked="taskForm.charmLayers.includes(layer.value)"
+                  @update:checked="
+                    (checked) => toggleTaskCharmLayer(layer.value, checked)
+                  "
+                >
+                  {{ layer.label }}
+                </n-checkbox>
+                <n-input-number
+                  v-model:value="taskForm.charmTargets[layer.value]"
+                  :min="1"
+                  :max="50"
+                  :precision="0"
+                  :disabled="!taskForm.charmLayers.includes(layer.value)"
+                  clearable
+                  placeholder="默认 1 张"
+                  style="width: 140px"
+                />
+              </div>
+            </div>
+            <div style="font-size: 12px; color: #86909c">
+              每个定时任务独立保存。未勾选的层不会查询、购买或记录未抢到警告；数量留空时按
+              1 张处理。
+            </div>
+          </div>
         </div>
         <div class="modal-actions" style="margin-top: 20px; text-align: right">
           <n-button @click="showTaskModal = false" style="margin-right: 12px"
@@ -3125,6 +3190,42 @@
         </div>
       </div>
     </n-modal>
+
+    <n-modal
+      v-model:show="showArenaClearModal"
+      preset="card"
+      title="竞技场清票"
+      style="width: 90%; max-width: 440px"
+    >
+      <n-space vertical :size="14">
+        <div>
+          <div class="setting-label">最多执行次数</div>
+          <n-input-number
+            v-model:value="arenaClearCount"
+            :min="1"
+            :max="100"
+            :precision="0"
+            style="width: 180px"
+          />
+        </div>
+        <n-alert type="info" :bordered="false">
+          实际次数取“目标次数”和当前咸神门票的较小值，单次最多 100
+          次。无论战斗胜负或单场异常都会继续下一场，结束后恢复执行前的竞技场阵容。
+        </n-alert>
+        <n-space justify="end">
+          <n-button @click="showArenaClearModal = false">取消</n-button>
+          <n-button
+            type="primary"
+            :loading="isRunning"
+            :disabled="selectedTokens.length === 0"
+            @click="handleArenaClearTickets"
+          >
+            开始清票
+          </n-button>
+        </n-space>
+      </n-space>
+    </n-modal>
+
     <NightmareConfigModal
       v-model:show="showNightmareConfig"
       :settings="batchSettings.nightmare"
@@ -3217,6 +3318,7 @@ import { ensureManualLease, releaseManualLease } from "@/utils/manualLease";
 import { readNasTokenIdMap } from "@/utils/nasTokenBootstrap";
 import {
   cloneNightmareSettings,
+  defaultNightmareCharmSettings,
   defaultNightmareSettings,
 } from "@/utils/nightmare";
 import {
@@ -3320,7 +3422,15 @@ const isbaokuActivityOpen = computed(() => {
   return !isSameGameValue(day, 1) && !isSameGameValue(day, 2);
 });
 const isarenaActivityOpen = computed(() => {
-  const hour = new Date().getHours();
+  const hour = Number(
+    new Intl.DateTimeFormat("en-US", {
+      timeZone: "Asia/Shanghai",
+      hour: "2-digit",
+      hourCycle: "h23",
+    })
+      .formatToParts(new Date())
+      .find((part) => part.type === "hour")?.value,
+  );
   return hour >= 6 && hour < 22;
 });
 const getCurrentActivityWeek = computed(() => {
@@ -3415,6 +3525,8 @@ const warGuessActivityTip = computed(() => {
 });
 
 const selectedTokens = ref([]);
+const showArenaClearModal = ref(false);
+const arenaClearCount = ref(100);
 const tokenStatus = ref({}); // { tokenId: 'waiting' | 'running' | 'completed' | 'failed' }
 const isRunning = ref(false);
 const shouldStop = ref(false);
@@ -3978,8 +4090,39 @@ const taskForm = reactive({
   selectedTasks: [], // Selected task function names
   legionApplyTargetId: null, // Target legion for batchApplyLegion
   nightmareTeamId: null,
+  charmLayers: [1, 2, 3, 4, 5, 6],
+  charmTargets: { ...defaultNightmareCharmSettings.targets },
+  arenaTicketCount: 100,
   enabled: true, // Whether the task is enabled
 });
+
+const charmLayerOptions = [1, 2, 3, 4, 5, 6].map((layer) => ({
+  label: `第 ${layer} 层`,
+  value: layer,
+}));
+
+function resetTaskSpecificOptions() {
+  taskForm.charmLayers = [1, 2, 3, 4, 5, 6];
+  taskForm.charmTargets = { ...defaultNightmareCharmSettings.targets };
+  taskForm.arenaTicketCount = 100;
+}
+
+function toggleTaskCharmLayer(layer, checked) {
+  const targetLayer = Number(layer);
+  if (checked) {
+    if (!taskForm.charmLayers.includes(targetLayer)) {
+      taskForm.charmLayers.push(targetLayer);
+    }
+    taskForm.charmLayers.sort((left, right) => left - right);
+    if (!Number(taskForm.charmTargets[targetLayer])) {
+      taskForm.charmTargets[targetLayer] = 1;
+    }
+    return;
+  }
+  taskForm.charmLayers = taskForm.charmLayers.filter(
+    (entry) => Number(entry) !== targetLayer,
+  );
+}
 
 function getScheduleGroupTokenIds(groupId) {
   return mapLocalTokenIdsToScheduleIds(
@@ -4031,6 +4174,7 @@ const taskGroupDefinitions = [
       "batchApplyLegion",
       "batchStudy",
       "batcharenafight",
+      "batchArenaClearTickets",
       "batchCampChallenge",
       "batchCampChallengePet",
       "batchCampClaimTasks",
@@ -4277,6 +4421,7 @@ const openTaskModal = async () => {
     nightmareTeamId: null,
     enabled: true,
   });
+  resetTaskSpecificOptions();
   showTaskModal.value = true;
 };
 
@@ -4316,6 +4461,7 @@ const editTask = async (task) => {
     nightmareTeamId: null,
     enabled: true,
   });
+  resetTaskSpecificOptions();
   Object.assign(taskForm, taskData);
   showTaskModal.value = true;
 };
@@ -4437,6 +4583,22 @@ const saveTask = async () => {
     }
   }
 
+  const charmLayers = [
+    ...new Set(
+      (taskForm.charmLayers || [])
+        .map(Number)
+        .filter((layer) => Number.isInteger(layer) && layer >= 1 && layer <= 6),
+    ),
+  ].sort((left, right) => left - right);
+  const charmTargets = Object.fromEntries(
+    charmLayers.map((layer) => [
+      layer,
+      Math.max(
+        1,
+        Math.min(50, Math.trunc(Number(taskForm.charmTargets[layer]) || 1)),
+      ),
+    ]),
+  );
   const taskData = {
     id: editingTask.value?.id,
     name: taskForm.name.trim(),
@@ -4447,6 +4609,12 @@ const saveTask = async () => {
     selectedTasks: [...taskForm.selectedTasks],
     legionApplyTargetId: Number(taskForm.legionApplyTargetId || 0) || null,
     nightmareTeamId: taskForm.nightmareTeamId || null,
+    charmLayers,
+    charmTargets,
+    arenaTicketCount: Math.max(
+      1,
+      Math.min(100, Math.trunc(Number(taskForm.arenaTicketCount) || 100)),
+    ),
     enabled: taskForm.enabled,
   };
 
@@ -6488,7 +6656,17 @@ const { batchbaoku13, batchbaoku45, batchmengjing, batchBuyDreamItems } =
   tasksDungeon;
 
 const tasksArena = createTasksArena(createTaskDeps());
-const { batcharenafight, batchTopUpFish, batchTopUpArena } = tasksArena;
+const {
+  batcharenafight,
+  batchArenaClearTickets,
+  batchTopUpFish,
+  batchTopUpArena,
+} = tasksArena;
+
+const handleArenaClearTickets = async () => {
+  showArenaClearModal.value = false;
+  await batchArenaClearTickets(arenaClearCount.value);
+};
 
 const tasksStore = createTasksStore(createTaskDeps());
 const {
@@ -7104,6 +7282,25 @@ const stopBatch = () => {
 .setting-label {
   font-size: 14px;
   color: #666;
+}
+
+.charm-layer-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 18px;
+}
+
+.charm-layer-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+@media (max-width: 640px) {
+  .charm-layer-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 .setting-switches {

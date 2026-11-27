@@ -1672,7 +1672,24 @@ export async function runCharmPurchaseForClient({
   let counts = areCharmCountsCurrent(roleInfo, new Date(now()))
     ? getCharmCounts(roleInfo)
     : {};
-  const targetLayers = [1, 2, 3, 4, 5, 6];
+  const purchased = [];
+  const skipped = [];
+  const targetLayers = [1, 2, 3, 4, 5, 6].filter(
+    (layer) => numberValue(settings.targets[layer]) > 0,
+  );
+  if (targetLayers.length === 0) {
+    return {
+      cmd: "nightmareCharmPurchase",
+      success: true,
+      status: "warning",
+      message: "该定时任务没有选择任何符咒层，本次未查询库存或购买",
+      purchased,
+      skipped: [],
+      alreadyOwned: [],
+      missing: [],
+      counts,
+    };
+  }
   const alreadyOwned = targetLayers.filter(
     (layer) =>
       numberValue(counts[layer]) >= numberValue(settings.targets[layer]),
@@ -1688,14 +1705,12 @@ export async function runCharmPurchaseForClient({
     settings.targets,
     settings.priority,
   );
-  const purchased = [];
-  const skipped = [];
   if (needs.length === 0) {
     return {
       cmd: "nightmareCharmPurchase",
       success: true,
       status: "info",
-      message: `第 1～6 层符咒均已满足目标数量；已拥有跳过 ${alreadyOwned.join("、") || "无"}`,
+      message: `所选第 ${targetLayers.join("、")} 层符咒均已满足目标数量；已拥有跳过 ${alreadyOwned.join("、") || "无"}`,
       purchased,
       alreadyOwned,
       missing: [],
@@ -1724,55 +1739,90 @@ export async function runCharmPurchaseForClient({
     };
   }
   for (const need of needs) {
-    const love = numberValue(nightmareInfo.love);
-    if (love < charmCost(need.layer)) {
-      skipped.push({ ...need, reason: "爱心不足" });
-      log(
-        `第 ${need.layer} 层符咒未抢到：爱心不足（需要 ${charmCost(need.layer)}，当前 ${love}）`,
-        "warning",
-      );
-      continue;
-    }
-    if (numberValue(lastLeft[need.layer]) <= 0) {
-      skipped.push({ ...need, reason: "商店库存不足" });
-      log(`第 ${need.layer} 层符咒未抢到：商店库存不足，不轮询等待`, "warning");
-      continue;
-    }
-    try {
-      const bought = await client.sendWithPromise(
-        NIGHTMARE_COMMANDS.buyCharm,
-        {
-          charmId: need.layer,
-          buyNum: Math.min(1, need.target - need.current),
-        },
-        10_000,
-      );
-      const result = bought?.getData?.() || bought || {};
-      if (result.success === false) {
-        skipped.push({ ...need, reason: "购买未成功" });
-        log(`第 ${need.layer} 层符咒购买未成功`, "warning");
-        continue;
+    let current = need.current;
+    let stopReason = "";
+    while (current < need.target) {
+      const love = numberValue(nightmareInfo.love);
+      if (love < charmCost(need.layer)) {
+        stopReason = "爱心不足";
+        log(
+          `第 ${need.layer} 层符咒未抢到：爱心不足（需要 ${charmCost(need.layer)}，当前 ${love}）`,
+          "warning",
+        );
+        break;
       }
-      purchased.push({
-        layer: need.layer,
-        count: numberValue(result.num),
-        love: numberValue(result.love),
+      if (numberValue(lastLeft[need.layer]) <= 0) {
+        stopReason = "商店库存不足";
+        log(
+          `第 ${need.layer} 层符咒未抢到：商店库存不足，不轮询等待`,
+          "warning",
+        );
+        break;
+      }
+      try {
+        const previous = current;
+        const bought = await client.sendWithPromise(
+          NIGHTMARE_COMMANDS.buyCharm,
+          {
+            charmId: need.layer,
+            buyNum: 1,
+          },
+          10_000,
+        );
+        const result = bought?.getData?.() || bought || {};
+        if (result.success === false) {
+          stopReason = "购买未成功";
+          log(`第 ${need.layer} 层符咒购买未成功`, "warning");
+          break;
+        }
+        current = Number.isFinite(Number(result.num))
+          ? Number(result.num)
+          : current + 1;
+        if (current <= previous) {
+          current = previous;
+          stopReason = "购买后数量未更新";
+          log(`第 ${need.layer} 层符咒购买后数量未更新，停止该层`, "warning");
+          break;
+        }
+        if (Number.isFinite(Number(result.love))) {
+          nightmareInfo.love = Number(result.love);
+        } else {
+          nightmareInfo.love = Math.max(
+            0,
+            numberValue(nightmareInfo.love) - charmCost(need.layer),
+          );
+        }
+        if (isObject(result.charmLeftNumMap)) {
+          lastLeft = normalizeNumberMap(result.charmLeftNumMap);
+        } else {
+          lastLeft[need.layer] = Math.max(
+            0,
+            numberValue(lastLeft[need.layer]) - 1,
+          );
+        }
+        purchased.push({
+          layer: need.layer,
+          count: current,
+          love: numberValue(result.love, nightmareInfo.love),
+        });
+        log(
+          `已抢到第 ${need.layer} 层符咒 ${current}/${need.target}，当前持有 ${current} 张`,
+          "success",
+        );
+      } catch (error) {
+        stopReason = `购买失败: ${error.message}`;
+        log(`第 ${need.layer} 层符咒购买失败：${error.message}`, "warning");
+        break;
+      }
+      await sleep(CHARM_BUY_COOLDOWN_MS);
+    }
+    if (current < need.target) {
+      skipped.push({
+        ...need,
+        current,
+        reason: stopReason || "未完成",
       });
-      if (Number.isFinite(Number(result.love))) {
-        nightmareInfo.love = Number(result.love);
-      }
-      if (isObject(result.charmLeftNumMap)) {
-        lastLeft = normalizeNumberMap(result.charmLeftNumMap);
-      }
-      log(
-        `已抢到第 ${need.layer} 层符咒，当前持有 ${numberValue(result.num)} 张`,
-        "success",
-      );
-    } catch (error) {
-      skipped.push({ ...need, reason: `购买失败: ${error.message}` });
-      log(`第 ${need.layer} 层符咒购买失败：${error.message}`, "warning");
     }
-    await sleep(CHARM_BUY_COOLDOWN_MS);
   }
   roleInfo = await client.sendWithPromise(
     NIGHTMARE_COMMANDS.getRoleInfo,
@@ -1798,7 +1848,7 @@ export async function runCharmPurchaseForClient({
       cmd: "nightmareCharmPurchase",
       success: true,
       status: skipped.length ? "warning" : "success",
-      message: `符咒目标已完成；已拥有 ${alreadyOwned.join("、") || "无"}；本次抢到 ${purchased.map((entry) => entry.layer).join("、") || "无"}`,
+      message: `所选层符咒目标已完成；已拥有 ${alreadyOwned.join("、") || "无"}；本次抢到 ${purchased.map((entry) => entry.layer).join("、") || "无"}`,
       purchased,
       skipped,
       alreadyOwned,
@@ -1809,7 +1859,7 @@ export async function runCharmPurchaseForClient({
   const missingText = missing
     .map((entry) => `第${entry.layer}层（${entry.reason}）`)
     .join("、");
-  const summary = `符咒未补齐：${missingText}；本次抢到 ${purchased.map((entry) => entry.layer).join("、") || "无"}；已拥有跳过 ${alreadyOwned.join("、") || "无"}`;
+  const summary = `所选层符咒未补齐：${missingText}；本次抢到 ${purchased.map((entry) => entry.layer).join("、") || "无"}；已拥有跳过 ${alreadyOwned.join("、") || "无"}`;
   log(summary, "warning");
   return {
     cmd: "nightmareCharmPurchase",

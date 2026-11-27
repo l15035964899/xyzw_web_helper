@@ -17,6 +17,7 @@ import {
   getNightmareStageOrder,
   nightmareMemberMatchesRole,
   normalizeNightmareSettings,
+  normalizeSelectedCharmSettings,
   validateNightmareSettings,
 } from "../render-backend/lib/nightmareSettings.js";
 
@@ -111,6 +112,21 @@ test("charm purchase plan prioritizes layers 2 and 5 and only fills missing coun
     needs.map((entry) => entry.layer),
     [2, 5],
   );
+});
+
+test("task charm settings select layers, allow optional counts and skip unselected layers", () => {
+  const settings = normalizeSelectedCharmSettings({
+    layers: [2, 5, 6],
+    targets: { 1: 9, 2: 2, 5: null, 6: 3 },
+  });
+  assert.deepEqual(settings.targets, {
+    1: 0,
+    2: 2,
+    3: 0,
+    4: 0,
+    5: 1,
+    6: 3,
+  });
 });
 
 test("cross-week pause targets Monday midnight in Shanghai time", () => {
@@ -281,6 +297,100 @@ test("charm task buys missing layers in priority order and stops at target", asy
       .map((entry) => entry.params.charmId),
     [2, 5],
   );
+});
+
+test("charm task can buy multiple copies of selected layers without touching others", async () => {
+  const counts = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0 };
+  let love = 1000;
+  const calls = [];
+  const logs = [];
+  const client = {
+    async sendWithPromise(cmd, params = {}) {
+      calls.push({ cmd, params });
+      if (cmd === "role_getroleinfo") {
+        return { role: { roleId: 101, serverId: 9 } };
+      }
+      if (cmd === "nightmare_getroleinfo") {
+        return {
+          nightMareData: {
+            roleId: 101,
+            love,
+            charmData: { ...counts },
+          },
+        };
+      }
+      if (cmd === "nightmare_getcharm") {
+        return {
+          charmLeftNumMap: { 2: 10, 5: 10 },
+        };
+      }
+      if (cmd === "nightmare_buycharm") {
+        counts[params.charmId] += 1;
+        love -= params.charmId === 2 ? 10 : 30;
+        return {
+          success: true,
+          num: counts[params.charmId],
+          love,
+        };
+      }
+      return {};
+    },
+  };
+
+  const result = await runCharmPurchaseForClient({
+    client,
+    token: { id: "a", name: "主力-101" },
+    charmSettings: {
+      targets: { 1: 0, 2: 2, 3: 0, 4: 0, 5: 1, 6: 0 },
+    },
+    log: (message) => logs.push(message),
+    sleep: async () => {},
+    now: () => 1,
+  });
+
+  assert.deepEqual(
+    calls
+      .filter((entry) => entry.cmd === "nightmare_buycharm")
+      .map((entry) => entry.params.charmId),
+    [2, 2, 5],
+  );
+  assert.equal(result.status, "success");
+  assert.deepEqual(result.missing, []);
+  assert.equal(
+    logs.some((message) => /第 [1346] 层符咒未抢到/.test(message)),
+    false,
+  );
+});
+
+test("charm task without selected layers does not query shop stock", async () => {
+  const calls = [];
+  const client = {
+    async sendWithPromise(cmd) {
+      calls.push(cmd);
+      if (cmd === "role_getroleinfo") {
+        return { role: { roleId: 101, serverId: 9 } };
+      }
+      if (cmd === "nightmare_getroleinfo") {
+        return { nightMareData: { love: 1000, charmData: {} } };
+      }
+      return {};
+    },
+  };
+
+  const result = await runCharmPurchaseForClient({
+    client,
+    token: { id: "a", name: "主力-101" },
+    charmSettings: {
+      targets: { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0 },
+    },
+    sleep: async () => {},
+    now: () => 1,
+  });
+
+  assert.equal(calls.includes("nightmare_getcharm"), false);
+  assert.equal(calls.includes("nightmare_buycharm"), false);
+  assert.equal(result.status, "warning");
+  assert.deepEqual(result.missing, []);
 });
 
 test("cross-account challenge stops after three full challenge attempts", async () => {

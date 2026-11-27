@@ -68,7 +68,7 @@ function normalizeStages(value, memberIds) {
     const raw = Array.isArray(source)
       ? source.find((entry) => Number(entry?.layer ?? entry?.level) === layer)
           ?.order
-      : source[layer]?.order ?? source[layer];
+      : (source[layer]?.order ?? source[layer]);
     return {
       layer,
       order: uniqueStrings(raw).filter((tokenId) => memberIds.has(tokenId)),
@@ -151,6 +151,42 @@ export function normalizeNightmareCharmSettings(input = {}) {
       120_000,
       2000,
       600_000,
+    ),
+  };
+}
+
+export function normalizeSelectedCharmSettings(input = {}) {
+  const settings = normalizeNightmareCharmSettings(input);
+  const targetSource =
+    input?.targets && typeof input.targets === "object" ? input.targets : {};
+  const requestedLayers = Array.isArray(input?.layers)
+    ? uniqueStrings(input.layers)
+        .map(Number)
+        .filter(
+          (layer) =>
+            Number.isInteger(layer) && NIGHTMARE_CHARM_LAYERS.includes(layer),
+        )
+    : Object.keys(targetSource)
+        .map(Number)
+        .filter(
+          (layer) =>
+            Number.isInteger(layer) && NIGHTMARE_CHARM_LAYERS.includes(layer),
+        );
+  const selectedLayers = new Set(requestedLayers);
+  return {
+    ...settings,
+    targets: Object.fromEntries(
+      NIGHTMARE_CHARM_LAYERS.map((layer) => [
+        layer,
+        selectedLayers.has(layer)
+          ? integerInRange(
+              targetSource[layer] ?? targetSource[String(layer)],
+              1,
+              1,
+              50,
+            )
+          : 0,
+      ]),
     ),
   };
 }

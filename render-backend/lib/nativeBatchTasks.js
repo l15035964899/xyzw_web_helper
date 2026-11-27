@@ -4,11 +4,13 @@ import process from "node:process";
 import { fillHangUpTime } from "./dailyTaskState.js";
 import {
   runArenaFights,
+  runArenaTicketClear,
   runDailyTasks,
   runResetBottles,
   runXuanwuBlessing,
 } from "./gameTasks.js";
 import { runCharmPurchaseForClient } from "./nightmareRunner.js";
+import { normalizeSelectedCharmSettings } from "./nightmareSettings.js";
 import { detectWeeklyStoreState } from "./weeklyStore.js";
 
 const FISH_TARGET = 320;
@@ -119,6 +121,26 @@ function accountSettings(token) {
     ...ACCOUNT_SETTINGS_DEFAULTS,
     ...(stored && typeof stored === "object" ? stored : {}),
   };
+}
+
+function charmSettingsForTask(task) {
+  const options =
+    task?.options && typeof task.options === "object" ? task.options : {};
+  const hasTaskTargets =
+    Array.isArray(options.charmLayers) ||
+    (options.charmTargets &&
+      typeof options.charmTargets === "object" &&
+      !Array.isArray(options.charmTargets));
+  if (hasTaskTargets) {
+    return normalizeSelectedCharmSettings({
+      layers: options.charmLayers,
+      targets: options.charmTargets,
+      priority: options.charmPriority,
+      pollIntervalMs: options.charmPollIntervalMs,
+      pollDurationMs: options.charmPollDurationMs,
+    });
+  }
+  return options.charm || options.nightmare?.charm;
 }
 
 function requiredNumberOption(options, key) {
@@ -1884,6 +1906,21 @@ export const NATIVE_TASK_CATALOG = {
     name: "一键竞技场战斗3次",
     group: "daily",
   },
+  batchArenaClearTickets: {
+    name: "竞技场清票",
+    group: "daily",
+    description: "按当前咸神门票逐场执行，无论胜负继续，单次最多 100 次",
+    options: [
+      {
+        key: "arenaTicketCount",
+        label: "最多执行次数",
+        type: "number",
+        default: 100,
+        min: 1,
+        max: 100,
+      },
+    ],
+  },
   batchTopUpFish: { name: "一键钓鱼补齐", group: "monthly" },
   batchTopUpArena: {
     name: "一键竞技场补齐",
@@ -1992,7 +2029,7 @@ export const NATIVE_TASK_CATALOG = {
   nightmareCharmPurchase: {
     name: "抢十殿符咒",
     group: "nightmare",
-    description: "为主力补齐第1～6层缺失符咒，优先第2、5层",
+    description: "按当前定时任务独立选择要抢的层和每层目标数量",
   },
 };
 
@@ -2054,6 +2091,15 @@ export async function runNativeBatchTask(key, client, context) {
       return [await runApplyLegion(client, token, task)];
     case "batcharenafight":
       return runArenaFights(client, context);
+    case "batchArenaClearTickets":
+      return runArenaTicketClear(client, {
+        token,
+        targetCount: numberOption(task?.options, "arenaTicketCount", 100, {
+          min: 1,
+          max: 100,
+        }),
+        maxFights: 100,
+      });
     case "batchTopUpFish":
       return [await runTopUpFish(client, token, task)];
     case "batchTopUpArena":
@@ -2228,7 +2274,7 @@ export async function runNativeBatchTask(key, client, context) {
         await runCharmPurchaseForClient({
           client,
           token,
-          charmSettings: task?.options?.nightmare?.charm,
+          charmSettings: charmSettingsForTask(task),
           waitUntil: task?.options?.charmPurchaseWaitUntil,
         }),
       ];

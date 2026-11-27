@@ -69,11 +69,10 @@ test("weird tower aggregate skips accounts whose module is closed", async () => 
       throw new Error("[200160] 模块未开启");
     },
   };
-  const results = await runNativeBatchTask(
-    "batchUseAndMergeItems",
-    client,
-    { token: token(), task: { options: {} } },
-  );
+  const results = await runNativeBatchTask("batchUseAndMergeItems", client, {
+    token: token(),
+    task: { options: {} },
+  });
   assert.equal(results[0].success, true);
   assert.equal(results[0].status, "warning");
   assert.match(results[0].message, /模块未开启/);
@@ -126,11 +125,10 @@ test("weird tower aggregate merges when the board is full and continues", async 
       return {};
     },
   };
-  const results = await runNativeBatchTask(
-    "batchUseAndMergeItems",
-    client,
-    { token: token(), task: { options: {} } },
-  );
+  const results = await runNativeBatchTask("batchUseAndMergeItems", client, {
+    token: token(),
+    task: { options: {} },
+  });
   assert.equal(results[0].success, true);
   assert.match(results[0].message, /使用钥匙 1 个/);
   assert.ok(calls.some(({ cmd }) => cmd === "mergebox_mergeitem"));
@@ -160,11 +158,10 @@ test("weird tower aggregate stops after three stalled merge rounds", async () =>
       return {};
     },
   };
-  const results = await runNativeBatchTask(
-    "batchUseAndMergeItems",
-    client,
-    { token: token(), task: { options: {} } },
-  );
+  const results = await runNativeBatchTask("batchUseAndMergeItems", client, {
+    token: token(),
+    task: { options: {} },
+  });
   assert.equal(results[0].success, false);
   assert.match(results[0].message, /连续 3 轮/);
 });
@@ -247,14 +244,10 @@ test("ten-day gift task uses the captured free-pack command", async () => {
     },
   };
 
-  const results = await runNativeBatchTask(
-    "activity_claimrolluppack",
-    client,
-    {
-      token: token(),
-      task: { options: {} },
-    },
-  );
+  const results = await runNativeBatchTask("activity_claimrolluppack", client, {
+    token: token(),
+    task: { options: {} },
+  });
 
   assert.deepEqual(calls, [
     { cmd: "activity_claimrolluppack", params: { id: 17 } },
@@ -271,14 +264,10 @@ test("ten-day gift task treats an already-claimed pack as a successful skip", as
     },
   };
 
-  const results = await runNativeBatchTask(
-    "activity_claimrolluppack",
-    client,
-    {
-      token: token(),
-      task: { options: {} },
-    },
-  );
+  const results = await runNativeBatchTask("activity_claimrolluppack", client, {
+    token: token(),
+    task: { options: {} },
+  });
 
   assert.equal(results[0].success, true);
   assert.equal(results[0].status, "info");
@@ -289,20 +278,14 @@ test("ten-day gift task treats 200020 as a non-failing warning", async () => {
   const client = {
     async sendWithPromise(cmd) {
       assert.equal(cmd, "activity_claimrolluppack");
-      throw new Error(
-        "[200020] 出了点小问题，请尝试重启游戏解决～",
-      );
+      throw new Error("[200020] 出了点小问题，请尝试重启游戏解决～");
     },
   };
 
-  const results = await runNativeBatchTask(
-    "activity_claimrolluppack",
-    client,
-    {
-      token: token(),
-      task: { options: {} },
-    },
-  );
+  const results = await runNativeBatchTask("activity_claimrolluppack", client, {
+    token: token(),
+    task: { options: {} },
+  });
 
   assert.equal(results[0].success, true);
   assert.equal(results[0].status, "warning");
@@ -310,7 +293,7 @@ test("ten-day gift task treats 200020 as a non-failing warning", async () => {
   assert.match(results[0].message, /可能已经领取/);
 });
 
-test("recruit-week store task uses the captured free-goods parameters", async () => {
+test("weekly gift task uses the recruit-week free-goods parameters", async () => {
   const calls = [];
   const client = {
     async sendWithPromise(cmd, params = {}) {
@@ -645,4 +628,64 @@ test("arena task uses each account's own formation setting", async () => {
       .map(({ params }) => params.teamId),
     [4, 2],
   );
+});
+
+test("scheduled charm task uses its own layer selection and target counts", async () => {
+  const calls = [];
+  const counts = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0 };
+  let love = 1000;
+  const client = {
+    async sendWithPromise(cmd, params = {}) {
+      calls.push({ cmd, params });
+      if (cmd === "role_getroleinfo") {
+        return { role: { roleId: 101, serverId: 9 } };
+      }
+      if (cmd === "nightmare_getroleinfo") {
+        return {
+          nightMareData: {
+            roleId: 101,
+            love,
+            charmData: { ...counts },
+          },
+        };
+      }
+      if (cmd === "nightmare_getcharm") {
+        return { charmLeftNumMap: { 2: 10, 6: 10 } };
+      }
+      if (cmd === "nightmare_buycharm") {
+        counts[params.charmId] += 1;
+        love -= 40;
+        return {
+          success: true,
+          num: counts[params.charmId],
+          love,
+        };
+      }
+      return {};
+    },
+  };
+
+  const results = await runNativeBatchTask("nightmareCharmPurchase", client, {
+    token: token(),
+    task: {
+      options: {
+        charmLayers: [6],
+        charmTargets: { 2: 9, 6: 2 },
+        nightmare: {
+          charm: {
+            targets: { 1: 1, 2: 1, 3: 1, 4: 1, 5: 1, 6: 1 },
+          },
+        },
+      },
+    },
+  });
+
+  assert.deepEqual(
+    calls
+      .filter(({ cmd }) => cmd === "nightmare_buycharm")
+      .map(({ params }) => params.charmId),
+    [6, 6],
+  );
+  assert.equal(results[0].status, "success");
+  assert.deepEqual(results[0].missing, []);
 });

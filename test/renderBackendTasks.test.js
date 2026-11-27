@@ -4,10 +4,14 @@ import { isBusinessServerError } from "../render-backend/lib/dailyTaskRunner.js"
 import {
   __test,
   dailyTaskResultSummary,
+  isArenaOpenAt,
   runArenaFights,
+  runArenaTicketClear,
   runResetBottles,
   runXuanwuBlessing,
 } from "../render-backend/lib/gameTasks.js";
+
+const OPEN_ARENA_NOW = () => new Date("2026-11-26T04:00:00.000Z");
 
 test("salt bottle reset stops before restarting the timer", async () => {
   const calls = [];
@@ -244,4 +248,149 @@ test("arena task skips without using formation or battle commands when tickets a
 
   assert.deepEqual(calls, ["role_getroleinfo"]);
   assert.match(results.at(-1).message, /跳过竞技场战斗/);
+});
+
+test("arena ticket clear caps at 100, continues after failures and restores the original formation", async () => {
+  const calls = [];
+  let roleReads = 0;
+  let fights = 0;
+  const client = {
+    async sendWithPromise(cmd, params = {}) {
+      calls.push({ cmd, params });
+      if (cmd === "role_getroleinfo") {
+        roleReads += 1;
+        return {
+          role: {
+            items: { 1007: { quantity: roleReads === 1 ? 500 : 400 } },
+          },
+        };
+      }
+      if (cmd === "presetteam_getinfo") {
+        return { presetTeamInfo: { useTeamId: 2 } };
+      }
+      if (cmd === "arena_getareatarget") {
+        return { targets: [{ roleId: 9001 }] };
+      }
+      if (cmd === "fight_startareaarena") {
+        fights += 1;
+        if (fights === 1) throw new Error("[500000] 战斗失败");
+        return { isWin: fights % 2 === 0 };
+      }
+      return {};
+    },
+  };
+
+  const results = await runArenaTicketClear(client, {
+    token: { id: "account-a", name: "测试账号" },
+    targetCount: 500,
+    maxFights: 100,
+    delayMs: 0,
+    now: OPEN_ARENA_NOW,
+  });
+
+  assert.equal(fights, 100);
+  assert.deepEqual(
+    calls
+      .filter(({ cmd }) => cmd === "presetteam_saveteam")
+      .map(({ params }) => params.teamId),
+    [1, 2],
+  );
+  assert.equal(
+    calls.filter(({ cmd }) => cmd === "fight_startareaarena").length,
+    100,
+  );
+  assert.match(results.at(-1).message, /实际发起 100 次/);
+  assert.match(results.at(-1).message, /异常 1 次/);
+  assert.match(results.at(-1).message, /剩余门票 400/);
+  assert.equal(results.at(-1).success, true);
+  assert.equal(results.at(-1).status, "warning");
+});
+
+test("arena ticket clear never exceeds the current ticket count", async () => {
+  let fights = 0;
+  const client = {
+    async sendWithPromise(cmd) {
+      if (cmd === "role_getroleinfo") {
+        return { role: { items: { 1007: { quantity: 3 } } } };
+      }
+      if (cmd === "presetteam_getinfo") {
+        return { presetTeamInfo: { useTeamId: 1 } };
+      }
+      if (cmd === "arena_getareatarget") {
+        return { targets: [{ roleId: 9001 }] };
+      }
+      if (cmd === "fight_startareaarena") {
+        fights += 1;
+      }
+      return {};
+    },
+  };
+
+  await runArenaTicketClear(client, {
+    token: { id: "account-a", name: "测试账号" },
+    targetCount: 100,
+    delayMs: 0,
+    now: OPEN_ARENA_NOW,
+  });
+
+  assert.equal(fights, 3);
+});
+
+test("arena ticket clear skips outside 06:00-22:00 Shanghai time", async () => {
+  assert.equal(isArenaOpenAt(new Date("2026-11-25T21:59:59.000Z")), false);
+  assert.equal(isArenaOpenAt(new Date("2026-11-25T22:00:00.000Z")), true);
+  assert.equal(isArenaOpenAt(new Date("2026-11-26T13:59:59.000Z")), true);
+  assert.equal(isArenaOpenAt(new Date("2026-11-26T14:00:00.000Z")), false);
+
+  let calls = 0;
+  const client = {
+    async sendWithPromise() {
+      calls += 1;
+      return {};
+    },
+  };
+  const results = await runArenaTicketClear(client, {
+    token: { id: "account-a", name: "测试账号" },
+    targetCount: 100,
+    now: () => new Date("2026-11-26T14:00:00.000Z"),
+  });
+
+  assert.equal(calls, 0);
+  assert.equal(results[0].success, true);
+  assert.equal(results[0].status, "info");
+  assert.match(results[0].message, /06:00-22:00/);
+  assert.match(results[0].message, /22:00/);
+});
+
+test("arena ticket clear stops if the 22:00 close time is reached during execution", async () => {
+  let nowCalls = 0;
+  let fights = 0;
+  const times = [
+    new Date("2026-11-26T13:59:59.000Z"),
+    new Date("2026-11-26T14:00:00.000Z"),
+  ];
+  const client = {
+    async sendWithPromise(cmd) {
+      if (cmd === "role_getroleinfo") {
+        return { role: { items: { 1007: { quantity: 5 } } } };
+      }
+      if (cmd === "presetteam_getinfo") {
+        return { presetTeamInfo: { useTeamId: 1 } };
+      }
+      if (cmd === "fight_startareaarena") {
+        fights += 1;
+      }
+      return {};
+    },
+  };
+
+  const results = await runArenaTicketClear(client, {
+    token: { id: "account-a", name: "测试账号" },
+    targetCount: 5,
+    delayMs: 0,
+    now: () => times[Math.min(nowCalls++, times.length - 1)],
+  });
+
+  assert.equal(fights, 0);
+  assert.match(results.at(-1).message, /22:00 关闭时间后提前停止/);
 });

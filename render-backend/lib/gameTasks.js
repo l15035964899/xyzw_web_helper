@@ -37,6 +37,38 @@ function shanghaiDateBase(date) {
   return `${values.year.slice(-2)}${values.month}${values.day}`;
 }
 
+export function getShanghaiHour(date = new Date()) {
+  const hour = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Shanghai",
+    hour: "2-digit",
+    hourCycle: "h23",
+  })
+    .formatToParts(date)
+    .find((part) => part.type === "hour")?.value;
+  return Number(hour);
+}
+
+export function isArenaOpenAt(date = new Date()) {
+  const hour = getShanghaiHour(date);
+  return hour >= 6 && hour < 22;
+}
+
+function arenaClosedMessage(date = new Date()) {
+  const time = new Intl.DateTimeFormat("zh-CN", {
+    timeZone: "Asia/Shanghai",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(date);
+  return `竞技场每日开放时间为 06:00-22:00（Asia/Shanghai），当前 ${time} 不在开放时间，跳过竞技场清票`;
+}
+
+function isArenaConnectionError(error) {
+  return /未连接|连接已关闭|websocket|socket|请求超时|timeout/i.test(
+    String(error?.message || error),
+  );
+}
+
 function formatReward(reward = []) {
   return reward
     .map((item) => {
@@ -267,6 +299,213 @@ export async function runArenaFights(client, { token, delayMs = 500 } = {}) {
       );
     }
   }
+  return results;
+}
+
+/**
+ * Spend arena tickets up to an explicit per-run limit. Every battle outcome,
+ * including a rejected fight command, advances the attempt counter so the
+ * task cannot get stuck retrying the same result.
+ */
+export async function runArenaTicketClear(
+  client,
+  {
+    token,
+    targetCount = 100,
+    delayMs = 500,
+    maxFights = 100,
+    now = () => new Date(),
+  } = {},
+) {
+  const currentTime = now();
+  if (!isArenaOpenAt(currentTime)) {
+    return [
+      {
+        cmd: "batchArenaClearTickets",
+        success: true,
+        status: "info",
+        message: arenaClosedMessage(currentTime),
+      },
+    ];
+  }
+  const hardLimit = Math.max(
+    1,
+    Math.min(100, Math.trunc(Number(maxFights) || 100)),
+  );
+  const requested = Math.max(
+    1,
+    Math.min(hardLimit, Math.trunc(Number(targetCount) || hardLimit)),
+  );
+  const results = [];
+  const roleResponse = await client.sendWithPromise(
+    "role_getroleinfo",
+    {},
+    15000,
+  );
+  const roleData = roleResponse?.role || roleResponse;
+  const initialTickets = Math.max(
+    0,
+    Number(roleData?.items?.[1007]?.quantity || 0),
+  );
+  const plannedFights = Math.min(requested, initialTickets);
+  if (plannedFights <= 0) {
+    return [
+      {
+        cmd: "arenaClearTickets",
+        success: true,
+        status: "info",
+        message: `咸神门票为 0，跳过竞技场清票（本次上限 ${requested} 次）`,
+      },
+    ];
+  }
+
+  const teamInfo = await client.sendWithPromise("presetteam_getinfo", {}, 5000);
+  const settings = taskSettings(token);
+  const originalFormation = Number(teamInfo?.presetTeamInfo?.useTeamId || 0);
+  const targetFormation = Math.max(
+    1,
+    Math.min(6, Math.trunc(Number(settings.arenaFormation) || 1)),
+  );
+  const switched =
+    originalFormation > 0 && originalFormation !== targetFormation;
+  let attempted = 0;
+  let failed = 0;
+  let closedEarly = false;
+
+  try {
+    if (switched) {
+      await client.sendWithPromise(
+        "presetteam_saveteam",
+        { teamId: targetFormation },
+        5000,
+      );
+    }
+    try {
+      await client.sendWithPromise("arena_startarea", {}, 6000);
+    } catch (error) {
+      if (isArenaConnectionError(error)) throw error;
+      results.push({
+        cmd: "arena_startarea",
+        success: true,
+        status: "warning",
+        message: `进入竞技场返回异常，继续尝试战斗：${error.message}`,
+      });
+    }
+
+    for (let index = 0; index < plannedFights; index += 1) {
+      const loopTime = now();
+      if (!isArenaOpenAt(loopTime)) {
+        closedEarly = true;
+        results.push({
+          cmd: "batchArenaClearTickets",
+          success: true,
+          status: "warning",
+          message: arenaClosedMessage(loopTime),
+        });
+        break;
+      }
+      let targetId = null;
+      try {
+        const targets = await client.sendWithPromise(
+          "arena_getareatarget",
+          {},
+          8000,
+        );
+        targetId = pickArenaTargetId(targets);
+      } catch (error) {
+        if (isArenaConnectionError(error)) throw error;
+        failed += 1;
+        results.push({
+          cmd: "arenaClearTickets",
+          success: true,
+          status: "warning",
+          message: `竞技场清票 ${index + 1}/${plannedFights} 读取对手失败，继续下一场：${error.message}`,
+        });
+      }
+      if (!targetId) {
+        if (results.at(-1)?.cmd !== "arenaClearTickets") {
+          failed += 1;
+          results.push({
+            cmd: "arenaClearTickets",
+            success: true,
+            status: "warning",
+            message: `竞技场清票 ${index + 1}/${plannedFights} 未找到可用对手，继续下一场`,
+          });
+        }
+        await sleep(delayMs);
+        continue;
+      }
+
+      attempted += 1;
+      try {
+        await client.sendWithPromise(
+          "fight_startareaarena",
+          { targetId },
+          15000,
+        );
+        results.push({
+          cmd: "arenaClearTickets",
+          success: true,
+          status: "success",
+          message: `竞技场清票 ${index + 1}/${plannedFights} 完成，继续使用剩余门票`,
+        });
+      } catch (error) {
+        failed += 1;
+        results.push({
+          cmd: "arenaClearTickets",
+          success: true,
+          status: "warning",
+          message: `竞技场清票 ${index + 1}/${plannedFights} 战斗失败，继续下一场：${error.message}`,
+        });
+        if (isArenaConnectionError(error)) throw error;
+      }
+      await sleep(delayMs);
+    }
+  } finally {
+    if (switched && originalFormation > 0) {
+      try {
+        await client.sendWithPromise(
+          "presetteam_saveteam",
+          { teamId: originalFormation },
+          5000,
+        );
+        results.push({
+          cmd: "arenaRestoreFormation",
+          success: true,
+          message: `已恢复原竞技场阵容 ${originalFormation}`,
+        });
+      } catch (error) {
+        results.push({
+          cmd: "arenaRestoreFormation",
+          success: true,
+          status: "warning",
+          message: `恢复原竞技场阵容失败：${error.message}`,
+        });
+      }
+    }
+  }
+
+  let remainingTickets = Math.max(0, initialTickets - attempted);
+  try {
+    const finalRole = await client.sendWithPromise(
+      "role_getroleinfo",
+      {},
+      10000,
+    );
+    const finalRoleData = finalRole?.role || finalRole;
+    remainingTickets = Math.max(
+      0,
+      Number(finalRoleData?.items?.[1007]?.quantity || 0),
+    );
+  } catch {
+    // Keep the local estimate when the final account read is unavailable.
+  }
+  results.push({
+    cmd: "arenaClearTickets",
+    success: true,
+    status: failed > 0 || closedEarly ? "warning" : "success",
+    message: `竞技场清票结束：目标 ${requested} 次，计划 ${plannedFights} 次，实际发起 ${attempted} 次，异常 ${failed} 次，剩余门票 ${remainingTickets}${closedEarly ? "；到达 22:00 关闭时间后提前停止" : ""}`,
+  });
   return results;
 }
 

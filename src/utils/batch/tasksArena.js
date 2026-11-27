@@ -5,6 +5,31 @@
 
 import { ARENA_TARGET, FISH_TARGET } from "./constants.js";
 
+function arenaOpenState(date = new Date()) {
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat("en-US", {
+      timeZone: "Asia/Shanghai",
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+    })
+      .formatToParts(date)
+      .filter((part) => part.type !== "literal")
+      .map((part) => [part.type, part.value]),
+  );
+  const hour = Number(parts.hour);
+  return {
+    open: hour >= 6 && hour < 22,
+    time: `${parts.hour}:${parts.minute}`,
+  };
+}
+
+function isArenaConnectionError(error) {
+  return /未连接|连接已关闭|websocket|socket|请求超时|timeout/i.test(
+    String(error?.message || error),
+  );
+}
+
 /**
  * 创建竞技场、补齐类任务执行器
  * @param {object} deps - 依赖项
@@ -219,6 +244,243 @@ export function createTasksArena(deps) {
     isRunning.value = false;
     currentRunningTokenId.value = null;
     message.success("批量竞技场战斗结束");
+  };
+
+  /**
+   * 竞技场清票：按当前门票执行，最多 100 次，胜败和单场异常都继续。
+   */
+  const batchArenaClearTickets = async (requestedCount = 100) => {
+    if (selectedTokens.value.length === 0) return;
+    const openState = arenaOpenState();
+    if (!openState.open) {
+      addLog({
+        time: new Date().toLocaleTimeString(),
+        message: `竞技场每日开放时间为 06:00-22:00（Asia/Shanghai），当前 ${openState.time} 不在开放时间，跳过竞技场清票`,
+        type: "warning",
+      });
+      message.warning("当前不在竞技场开放时间，已跳过清票");
+      return;
+    }
+    const targetCount = Math.max(
+      1,
+      Math.min(100, Math.trunc(Number(requestedCount) || 100)),
+    );
+    isRunning.value = true;
+    shouldStop.value = false;
+
+    selectedTokens.value.forEach((id) => {
+      tokenStatus.value[id] = "waiting";
+    });
+
+    const taskPromises = selectedTokens.value.map(async (tokenId) => {
+      if (shouldStop.value) return;
+      tokenStatus.value[tokenId] = "running";
+      const token = tokens.value.find((entry) => entry.id === tokenId);
+      const tokenSettings = loadSettings
+        ? loadSettings(tokenId) || currentSettings
+        : currentSettings;
+      let originalFormation = 0;
+      let switched = false;
+
+      try {
+        addLog({
+          time: new Date().toLocaleTimeString(),
+          message: `=== 开始竞技场清票: ${token.name}，本次上限 ${targetCount} 次 ===`,
+          type: "info",
+        });
+        await ensureConnection(tokenId);
+        const roleInfo = await tokenStore.sendGetRoleInfo(tokenId);
+        const ticketCount = Math.max(
+          0,
+          Number(roleInfo?.role?.items?.[1007]?.quantity || 0),
+        );
+        const plannedFights = Math.min(targetCount, ticketCount);
+        addLog({
+          time: new Date().toLocaleTimeString(),
+          message: `${token.name} 当前咸神门票 ${ticketCount}，本次计划执行 ${plannedFights} 次`,
+          type: "info",
+        });
+        if (plannedFights <= 0) {
+          tokenStatus.value[tokenId] = "completed";
+          addLog({
+            time: new Date().toLocaleTimeString(),
+            message: `${token.name} 没有可用咸神门票，跳过竞技场清票`,
+            type: "warning",
+          });
+          return;
+        }
+
+        const teamInfo = await tokenStore.sendMessageWithPromise(
+          tokenId,
+          "presetteam_getinfo",
+          {},
+          5000,
+        );
+        originalFormation = Number(teamInfo?.presetTeamInfo?.useTeamId || 0);
+        const arenaFormation = Math.max(
+          1,
+          Math.min(6, Number(tokenSettings.arenaFormation) || 1),
+        );
+        switched =
+          originalFormation > 0 && originalFormation !== arenaFormation;
+        if (switched) {
+          await tokenStore.sendMessageWithPromise(
+            tokenId,
+            "presetteam_saveteam",
+            { teamId: arenaFormation },
+            5000,
+          );
+        }
+
+        try {
+          await tokenStore.sendMessageWithPromise(
+            tokenId,
+            "arena_startarea",
+            {},
+            6000,
+          );
+        } catch (error) {
+          if (isArenaConnectionError(error)) throw error;
+          addLog({
+            time: new Date().toLocaleTimeString(),
+            message: `${token.name} 进入竞技场返回异常，继续尝试：${error.message}`,
+            type: "warning",
+          });
+        }
+
+        let failures = 0;
+        let closedEarly = false;
+        for (let index = 0; index < plannedFights; index += 1) {
+          if (shouldStop.value) break;
+          const loopOpenState = arenaOpenState();
+          if (!loopOpenState.open) {
+            closedEarly = true;
+            addLog({
+              time: new Date().toLocaleTimeString(),
+              message: `竞技场每日开放时间为 06:00-22:00（Asia/Shanghai），当前 ${loopOpenState.time} 已关闭，提前结束清票`,
+              type: "warning",
+            });
+            break;
+          }
+          let targetId = null;
+          try {
+            const targets = await tokenStore.sendMessageWithPromise(
+              tokenId,
+              "arena_getareatarget",
+              {},
+              8000,
+            );
+            targetId = pickArenaTargetId(targets);
+          } catch (error) {
+            if (isArenaConnectionError(error)) throw error;
+            failures += 1;
+            addLog({
+              time: new Date().toLocaleTimeString(),
+              message: `${token.name} 清票 ${index + 1}/${plannedFights} 读取对手失败，继续下一场：${error.message}`,
+              type: "warning",
+            });
+            await new Promise((resolve) =>
+              setTimeout(resolve, delayConfig.battle),
+            );
+            continue;
+          }
+          if (!targetId) {
+            failures += 1;
+            addLog({
+              time: new Date().toLocaleTimeString(),
+              message: `${token.name} 清票 ${index + 1}/${plannedFights} 未找到对手，继续下一场`,
+              type: "warning",
+            });
+            await new Promise((resolve) =>
+              setTimeout(resolve, delayConfig.battle),
+            );
+            continue;
+          }
+          try {
+            await tokenStore.sendMessageWithPromise(
+              tokenId,
+              "fight_startareaarena",
+              { targetId },
+              15000,
+            );
+            addLog({
+              time: new Date().toLocaleTimeString(),
+              message: `${token.name} 清票 ${index + 1}/${plannedFights} 完成，继续使用剩余门票`,
+              type: "info",
+            });
+          } catch (error) {
+            failures += 1;
+            addLog({
+              time: new Date().toLocaleTimeString(),
+              message: `${token.name} 清票 ${index + 1}/${plannedFights} 战斗失败，继续下一场：${error.message}`,
+              type: "warning",
+            });
+            if (isArenaConnectionError(error)) throw error;
+          }
+          await new Promise((resolve) =>
+            setTimeout(resolve, delayConfig.battle),
+          );
+        }
+
+        let remainingTickets = Math.max(0, ticketCount - plannedFights);
+        try {
+          const finalRoleInfo = await tokenStore.sendGetRoleInfo(tokenId);
+          remainingTickets = Math.max(
+            0,
+            Number(finalRoleInfo?.role?.items?.[1007]?.quantity || 0),
+          );
+        } catch {
+          // Keep the local estimate when the final state read fails.
+        }
+        tokenStatus.value[tokenId] = "completed";
+        addLog({
+          time: new Date().toLocaleTimeString(),
+          message: `${token.name} 竞技场清票结束：计划 ${plannedFights} 次，异常 ${failures} 次，剩余门票 ${remainingTickets}${closedEarly ? "，到达关闭时间后提前停止" : ""}`,
+          type: failures > 0 || closedEarly ? "warning" : "success",
+        });
+      } catch (error) {
+        tokenStatus.value[tokenId] = "failed";
+        addLog({
+          time: new Date().toLocaleTimeString(),
+          message: `${token.name} 竞技场清票失败: ${error.message || "未知错误"}`,
+          type: "error",
+        });
+      } finally {
+        if (switched && originalFormation > 0) {
+          try {
+            await tokenStore.sendMessageWithPromise(
+              tokenId,
+              "presetteam_saveteam",
+              { teamId: originalFormation },
+              5000,
+            );
+            addLog({
+              time: new Date().toLocaleTimeString(),
+              message: `${token.name} 已恢复原竞技场阵容 ${originalFormation}`,
+              type: "info",
+            });
+          } catch (error) {
+            addLog({
+              time: new Date().toLocaleTimeString(),
+              message: `${token.name} 恢复原竞技场阵容失败: ${error.message}`,
+              type: "error",
+            });
+          }
+        }
+        tokenStore.closeWebSocketConnection(tokenId);
+        releaseConnectionSlot();
+        addLog({
+          time: new Date().toLocaleTimeString(),
+          message: `${token.name} 连接已关闭  (队列: ${connectionQueue.active}/${batchSettings.maxActive})`,
+          type: "info",
+        });
+      }
+    });
+
+    await Promise.all(taskPromises);
+    isRunning.value = false;
+    currentRunningTokenId.value = null;
+    message.success("批量竞技场清票结束");
   };
 
   /**
@@ -919,6 +1181,7 @@ export function createTasksArena(deps) {
 
   return {
     batcharenafight,
+    batchArenaClearTickets,
     batchTopUpFish,
     batchTopUpArena,
   };
