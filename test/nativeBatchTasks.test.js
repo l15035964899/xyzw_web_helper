@@ -343,7 +343,7 @@ test("recruit-week store task uses the captured free-goods parameters", async ()
   assert.match(results[0].message, /招募周限时商店奖励领取完成/);
 });
 
-test("recruit-week store task treats an already-claimed goods as a successful skip", async () => {
+test("weekly gift task treats an already-claimed recruit gift as a successful skip", async () => {
   const calls = [];
   const client = {
     async sendWithPromise(cmd, params = {}) {
@@ -371,7 +371,7 @@ test("recruit-week store task treats an already-claimed goods as a successful sk
   assert.deepEqual(calls, [{ cmd: "activity_get", params: {} }]);
 });
 
-test("recruit-week store task skips other rotating weekly activity types", async () => {
+test("weekly gift task skips an inactive weekly store", async () => {
   const calls = [];
   const client = {
     async sendWithPromise(cmd, params = {}) {
@@ -395,11 +395,77 @@ test("recruit-week store task skips other rotating weekly activity types", async
 
   assert.equal(results[0].success, true);
   assert.equal(results[0].status, "info");
-  assert.match(results[0].message, /当前不是招募周/);
+  assert.match(results[0].message, /当前限时商店活动未开放/);
   assert.deepEqual(calls, [{ cmd: "activity_get", params: {} }]);
 });
 
-test("recruit-week store 1100010 is a non-failing warning", async () => {
+test("weekly gift task reads box-week state from decoded Map fields", async () => {
+  const calls = [];
+  const client = {
+    async sendWithPromise(cmd, params = {}) {
+      calls.push({ cmd, params });
+      if (cmd === "activity_get") {
+        return {
+          _data: {
+            activity: {
+              activity: [
+                { id: 2, type: 2, name: "宝箱达标" },
+                { id: 7, type: 4, name: "限时商店" },
+              ],
+              myStoreInfo: new Map([[7, { complete: new Map([[0, 0]]) }]]),
+            },
+          },
+        };
+      }
+      return {};
+    },
+  };
+
+  const results = await runNativeBatchTask("activity_buystoregoods", client, {
+    token: token(),
+    task: { options: {} },
+  });
+
+  assert.deepEqual(calls, [
+    { cmd: "activity_get", params: {} },
+    {
+      cmd: "activity_buystoregoods",
+      params: { activityId: 7, goodsIndex: 0, buyNum: 1 },
+    },
+  ]);
+  assert.equal(results[0].success, true);
+  assert.match(results[0].message, /宝箱周限时商店奖励领取完成/);
+});
+
+test("weekly gift task skips a weekly store without a captured protocol", async () => {
+  const calls = [];
+  const client = {
+    async sendWithPromise(cmd, params = {}) {
+      calls.push({ cmd, params });
+      if (cmd === "activity_get") {
+        return {
+          activity: {
+            activity: [{ id: 99, type: 4, name: "江湖黑市" }],
+            myStoreInfo: {},
+          },
+        };
+      }
+      throw new Error("activity_buystoregoods should not be sent");
+    },
+  };
+
+  const results = await runNativeBatchTask("activity_buystoregoods", client, {
+    token: token(),
+    task: { options: {} },
+  });
+
+  assert.equal(results[0].success, true);
+  assert.equal(results[0].status, "info");
+  assert.match(results[0].message, /尚未配置/);
+  assert.deepEqual(calls, [{ cmd: "activity_get", params: {} }]);
+});
+
+test("weekly gift 1100010 is a non-failing warning", async () => {
   const client = {
     async sendWithPromise(cmd) {
       if (cmd === "activity_get") {

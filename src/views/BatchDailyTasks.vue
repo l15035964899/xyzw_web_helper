@@ -385,7 +385,7 @@
                   @click="activity_buystoregoods"
                   :disabled="isRunning || selectedTokens.length === 0"
                 >
-                  领取招募周限时商店
+                  领取周常免费礼包
                 </n-button>
                 <n-button
                   size="small"

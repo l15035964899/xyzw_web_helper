@@ -9,6 +9,7 @@ import {
   runXuanwuBlessing,
 } from "./gameTasks.js";
 import { runCharmPurchaseForClient } from "./nightmareRunner.js";
+import { detectWeeklyStoreState } from "./weeklyStore.js";
 
 const FISH_TARGET = 320;
 const ARENA_TARGET = 240;
@@ -18,12 +19,6 @@ const LEGACY_MIN_COLLECT_MS = 60_000;
 const LEGACY_FIRST_REWARD_MS = 300_000;
 const LEGACY_COLLECT_SETTLE_MS = 1_500;
 const TEN_DAY_FREE_GIFT_ID = 17;
-const RECRUIT_WEEK_STORE_GOODS = {
-  activityId: 6,
-  goodsIndex: 0,
-  buyNum: 1,
-};
-const RECRUIT_WEEK_ACTIVITY_TYPE = 4;
 const ACCOUNT_SETTINGS_DEFAULTS = {
   arenaFormation: 1,
   towerFormation: 1,
@@ -95,24 +90,6 @@ const PEACH_TASK_TARGETS = {
 };
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
-function getRecruitWeekStoreState(response) {
-  const activityRoot = response?.activity?.activity
-    ? response.activity
-    : response?.activity || response;
-  const activeActivity = (activityRoot?.activity || []).find(
-    (activity) => Number(activity?.id) === RECRUIT_WEEK_STORE_GOODS.activityId,
-  );
-  const complete =
-    Number(
-      activityRoot?.myStoreInfo?.[RECRUIT_WEEK_STORE_GOODS.activityId]
-        ?.complete?.[RECRUIT_WEEK_STORE_GOODS.goodsIndex] || 0,
-    ) > 0;
-  return {
-    active: Number(activeActivity?.type) === RECRUIT_WEEK_ACTIVITY_TYPE,
-    complete,
-  };
-}
 
 function numberOption(options, key, fallback, { min, max } = {}) {
   const raw = options?.[key];
@@ -1945,9 +1922,10 @@ export const NATIVE_TASK_CATALOG = {
     description: "领取主页十殿礼包中的第一个免费礼包",
   },
   activity_buystoregoods: {
-    name: "领取招募周限时商店",
+    name: "领取周常免费礼包",
     group: "daily",
-    description: "领取招募周限时商店的第一个免费礼包；其他周常轮换需重新确认",
+    description:
+      "自动识别招募周或宝箱周，领取限时商店的第一个免费礼包；其他周常轮换需补充协议",
   },
   batchLegacyClaim: {
     name: "批量领取功法残卷",
@@ -2126,53 +2104,60 @@ export async function runNativeBatchTask(key, client, context) {
               cmd: key,
               success: true,
               status: "warning",
-              message:
-                "十殿免费礼包可能已经领取（服务器返回 200020），未重试",
+              message: "十殿免费礼包可能已经领取（服务器返回 200020），未重试",
             },
           ];
         }
         throw error;
       }
-    case "activity_buystoregoods":
-      {
-        const activityResponse = await client.sendWithPromise(
-          "activity_get",
-          {},
-          8000,
-        );
-        const weeklyState = getRecruitWeekStoreState(activityResponse);
-        if (!weeklyState.active) {
-          return [
-            {
-              cmd: key,
-              success: true,
-              status: "info",
-              message: "当前不是招募周，跳过限时商店领取",
-            },
-          ];
-        }
-        if (weeklyState.complete) {
-          return [
-            {
-              cmd: key,
-              success: true,
-              status: "info",
-              message: "招募周限时商店本周已经领取",
-            },
-          ];
-        }
+    case "activity_buystoregoods": {
+      const activityResponse = await client.sendWithPromise(
+        "activity_get",
+        {},
+        8000,
+      );
+      const weeklyState = detectWeeklyStoreState(activityResponse);
+      if (!weeklyState.supported) {
+        return [
+          {
+            cmd: key,
+            success: true,
+            status: "info",
+            message: "当前周常商店协议尚未配置，跳过免费礼包领取",
+          },
+        ];
+      }
+      if (!weeklyState.active) {
+        return [
+          {
+            cmd: key,
+            success: true,
+            status: "info",
+            message: "当前限时商店活动未开放，跳过免费礼包领取",
+          },
+        ];
+      }
+      if (weeklyState.complete) {
+        return [
+          {
+            cmd: key,
+            success: true,
+            status: "info",
+            message: `${weeklyState.label}限时商店本周已经领取`,
+          },
+        ];
       }
       try {
         await client.sendWithPromise(
           "activity_buystoregoods",
-          { ...RECRUIT_WEEK_STORE_GOODS },
+          weeklyState.goods,
           5000,
         );
         return [
           {
             cmd: key,
             success: true,
-            message: "招募周限时商店奖励领取完成",
+            message: `${weeklyState.label}限时商店奖励领取完成`,
           },
         ];
       } catch (error) {
@@ -2183,7 +2168,7 @@ export async function runNativeBatchTask(key, client, context) {
               cmd: key,
               success: true,
               status: "warning",
-              message: "招募周限时商店本周已经领取",
+              message: `${weeklyState?.label || "周常"}限时商店本周已经领取`,
             },
           ];
         }
@@ -2193,12 +2178,13 @@ export async function runNativeBatchTask(key, client, context) {
               cmd: key,
               success: true,
               status: "warning",
-              message: "招募周限时商店本周已经领取",
+              message: `${weeklyState?.label || "周常"}限时商店本周已经领取`,
             },
           ];
         }
         throw error;
       }
+    }
     case "batchLegacyClaim": {
       const result = await claimLegacyHangUp(client, {
         deferUntilReady: true,

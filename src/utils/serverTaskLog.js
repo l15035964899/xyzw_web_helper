@@ -20,7 +20,7 @@ const TASK_TYPE_LABELS = {
   batchlingguanzi: "领取盐罐",
   collection_claimfreereward: "珍宝阁免费领取",
   activity_claimrolluppack: "领取十殿免费礼包",
-  activity_buystoregoods: "领取招募周限时商店",
+  activity_buystoregoods: "领取周常免费礼包",
   batchXuanwuBlessing: "玄武赐福",
   dailyBundle: "一键日常",
   system_signinreward: "执行签到",

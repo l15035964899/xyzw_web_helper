@@ -4,6 +4,7 @@
  * store_syncpurchaseconfig, collection_claimfreereward
  */
 
+import { detectWeeklyStoreState } from "../../../render-backend/lib/weeklyStore.js";
 import {
   compareBlackMarketPurchaseLists,
   normalizeBlackMarketPurchaseList,
@@ -11,30 +12,6 @@ import {
 } from "./blackMarketConfig";
 
 const TEN_DAY_FREE_GIFT_ID = 17;
-const RECRUIT_WEEK_STORE_GOODS = {
-  activityId: 6,
-  goodsIndex: 0,
-  buyNum: 1,
-};
-const RECRUIT_WEEK_ACTIVITY_TYPE = 4;
-
-function getRecruitWeekStoreState(response) {
-  const activityRoot = response?.activity?.activity
-    ? response.activity
-    : response?.activity || response;
-  const activeActivity = (activityRoot?.activity || []).find(
-    (activity) => Number(activity?.id) === RECRUIT_WEEK_STORE_GOODS.activityId,
-  );
-  const complete =
-    Number(
-      activityRoot?.myStoreInfo?.[RECRUIT_WEEK_STORE_GOODS.activityId]
-        ?.complete?.[RECRUIT_WEEK_STORE_GOODS.goodsIndex] || 0,
-    ) > 0;
-  return {
-    active: Number(activeActivity?.type) === RECRUIT_WEEK_ACTIVITY_TYPE,
-    complete,
-  };
-}
 
 /**
  * 创建商店类任务执行器
@@ -665,8 +642,8 @@ export function createTasksStore(deps) {
   };
 
   /**
-   * 领取招募周“周活动 -> 限时商店”的第一个免费项。
-   * 招募、宝箱、江湖黑市三个周常轮换，后续类型需重新抓包确认参数。
+   * 领取当前周常“周活动 -> 限时商店”的第一个免费项。
+   * 招募周、宝箱周已配置；江湖黑市周需抓包后补充协议。
    */
   const activity_buystoregoods = async () => {
     if (selectedTokens.value.length === 0) return;
@@ -687,7 +664,7 @@ export function createTasksStore(deps) {
       try {
         addLog({
           time: new Date().toLocaleTimeString(),
-          message: `=== 开始领取招募周限时商店奖励: ${token.name} ===`,
+          message: `=== 开始领取周常免费礼包: ${token.name} ===`,
           type: "info",
         });
 
@@ -695,7 +672,7 @@ export function createTasksStore(deps) {
 
         addLog({
           time: new Date().toLocaleTimeString(),
-          message: `${token.name} 读取招募周限时商店状态...`,
+          message: `${token.name} 读取周常限时商店状态...`,
           type: "info",
         });
 
@@ -705,11 +682,20 @@ export function createTasksStore(deps) {
           {},
           5000,
         );
-        const weeklyState = getRecruitWeekStoreState(activityResponse);
+        const weeklyState = detectWeeklyStoreState(activityResponse);
+        if (!weeklyState.supported) {
+          addLog({
+            time: new Date().toLocaleTimeString(),
+            message: `${token.name} 当前周常商店协议尚未配置，跳过领取`,
+            type: "info",
+          });
+          tokenStatus.value[tokenId] = "completed";
+          return;
+        }
         if (!weeklyState.active) {
           addLog({
             time: new Date().toLocaleTimeString(),
-            message: `${token.name} 当前不是招募周，跳过限时商店领取`,
+            message: `${token.name} 当前限时商店活动未开放，跳过领取`,
             type: "info",
           });
           tokenStatus.value[tokenId] = "completed";
@@ -718,7 +704,7 @@ export function createTasksStore(deps) {
         if (weeklyState.complete) {
           addLog({
             time: new Date().toLocaleTimeString(),
-            message: `${token.name} 招募周限时商店本周已领取`,
+            message: `${token.name} ${weeklyState.label}限时商店本周已领取`,
             type: "info",
           });
           tokenStatus.value[tokenId] = "completed";
@@ -727,14 +713,14 @@ export function createTasksStore(deps) {
 
         addLog({
           time: new Date().toLocaleTimeString(),
-          message: `${token.name} 发送招募周免费礼包领取请求...`,
+          message: `${token.name} 发送${weeklyState.label}免费礼包领取请求...`,
           type: "info",
         });
 
         await tokenStore.sendMessageWithPromise(
           tokenId,
           "activity_buystoregoods",
-          { ...RECRUIT_WEEK_STORE_GOODS },
+          weeklyState.goods,
           5000,
         );
 
@@ -742,19 +728,20 @@ export function createTasksStore(deps) {
 
         addLog({
           time: new Date().toLocaleTimeString(),
-          message: `${token.name} 招募周限时商店领取完成`,
+          message: `${token.name} ${weeklyState.label}限时商店领取完成`,
           type: "success",
         });
         tokenStatus.value[tokenId] = "completed";
       } catch (error) {
         const errorText = String(error?.message || error);
-        const alreadyClaimed =
-          /1100010|12000116|1000020|700020|7900023/.test(errorText);
+        const alreadyClaimed = /1100010|12000116|1000020|700020|7900023/.test(
+          errorText,
+        );
         addLog({
           time: new Date().toLocaleTimeString(),
           message: alreadyClaimed
-            ? `${token.name} 招募周限时商店本周已领取`
-            : `${token.name} 招募周限时商店领取失败: ${error.message || error}`,
+            ? `${token.name} 周常免费礼包本周已领取`
+            : `${token.name} 周常免费礼包领取失败: ${error.message || error}`,
           type: alreadyClaimed ? "warning" : "error",
         });
         tokenStatus.value[tokenId] = alreadyClaimed ? "completed" : "failed";

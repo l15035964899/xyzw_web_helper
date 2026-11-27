@@ -6,7 +6,7 @@
 | 文档 | 内容 |
 | --- | --- |
 | [auto-nightmare.md](auto-nightmare.md) | 自动十殿配置、建队、1～8 层、跨周、符咒和阵容恢复 |
-| [weekly-gifts-and-logs.md](weekly-gifts-and-logs.md) | 十殿礼包、招募周限时商店、错误码和日志时间 |
+| [weekly-gifts-and-logs.md](weekly-gifts-and-logs.md) | 十殿礼包、周常免费礼包、错误码和日志时间 |
 | [nas-batch-runtime.md](nas-batch-runtime.md) | NAS Cron、账号锁、租约、持久化和部署运行 |
 | [role-identity-and-token.md](role-identity-and-token.md) | 角色身份校验、BIN 续期和防串号 |
 | [desktop-client-and-bin.md](desktop-client-and-bin.md) | Electron 客户端和临时 BIN 通道 |

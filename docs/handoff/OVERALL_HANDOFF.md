@@ -74,7 +74,7 @@ origin/main = cf45acf
 | 功能 | 文档 | 当前状态 |
 | --- | --- | --- |
 | 自动十殿 | [auto-nightmare.md](requirements/auto-nightmare.md) | 已实现并真实通关 |
-| 周常礼包与日志 | [weekly-gifts-and-logs.md](requirements/weekly-gifts-and-logs.md) | 招募周完成，另外两种周常待补 |
+| 周常礼包与日志 | [weekly-gifts-and-logs.md](requirements/weekly-gifts-and-logs.md) | 招募周、宝箱周完成，江湖黑市周待抓包 |
 | NAS 调度与任务运行 | [nas-batch-runtime.md](requirements/nas-batch-runtime.md) | 已实现 |
 | 角色身份与 Token | [role-identity-and-token.md](requirements/role-identity-and-token.md) | 已实现并在线验证 |
 | 桌面端与 BIN | [desktop-client-and-bin.md](requirements/desktop-client-and-bin.md) | 已实现 |
